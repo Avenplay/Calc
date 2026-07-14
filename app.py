@@ -337,74 +337,109 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                 conexion.close()
                 st.success(f"✅ ¡{prod_m.title()} ({marca_m}) guardado a {precio_ref:.2f} €/kg!")
 
-   # ------------------------------------------
-    # PESTAÑA 2: CÁMARA INTELIGENTE (IA)
+  # ------------------------------------------
+    # PESTAÑA 2: ESCÁNER HÍBRIDO (IA + API + IA)
     # ------------------------------------------
-    with tab_barras: # Mantengo la variable tab_barras para no romper tu estructura
-        st.subheader("📸 Escáner de Envases con IA")
-        st.write("Hazle una foto a la etiqueta frontal del producto. La IA extraerá los datos al instante.")
+    with tab_barras:
+        import requests
+        st.subheader("🔍 Escáner Híbrido: Código de Barras")
+        st.write("Hazle una foto a los números del código de barras. La IA extraerá el código, consultará la base mundial y estructurará los datos.")
         
-        foto_producto = st.camera_input("📸 Capturar Producto")
+        foto_barras = st.camera_input("📸 Capturar Código de Barras")
         
-        if foto_producto:
-            if st.button("🚀 Extraer Datos con IA", use_container_width=True):
-                with st.spinner("Analizando la etiqueta del producto..."):
-                    try:
-                        # Sintaxis oficial 2026
-                        client = genai.Client(api_key=api_key)
-                        img = Image.open(foto_producto)
-                        img.save("temp_producto.png")
+        if foto_barras:
+            if st.button("🚀 Iniciar Escaneo Híbrido", use_container_width=True):
+                
+                try:
+                    client = genai.Client(api_key=api_key)
+                    img = Image.open(foto_barras)
+                    img.save("temp_barras.png")
+                    
+                    # FASE 1: IA lee la imagen y saca el número
+                    with st.spinner("Fase 1: IA leyendo el código numérico..."):
+                        prompt_1 = "Lee el código de barras de esta imagen. Devuelve ÚNICAMENTE los números (suele tener 13 dígitos). Nada de texto adicional ni símbolos, solo el número."
                         
-                        prompt = "Analiza el envase de esta foto y devuelve estrictamente un objeto JSON con 3 claves: 'producto_generico' (qué es, ej: tomate frito, leche entera), 'marca' (ej: Orlando, si no pone nada pon Blanca), y 'peso_total' (solo el numero en kg o litros, ej: si marca 400g pon 0.4). Sin explicaciones, solo el JSON."
-                        
-                        uploaded_file = client.files.upload(file="temp_producto.png")
-                        response = client.models.generate_content(
+                        uploaded_file = client.files.upload(file="temp_barras.png")
+                        res_1 = client.models.generate_content(
                             model='gemini-2.5-flash', 
-                            contents=[uploaded_file, prompt]
+                            contents=[uploaded_file, prompt_1]
                         )
                         
-                        raw_text = response.text.strip()
+                        codigo_ean = res_1.text.strip().replace(" ", "")
                         
-                        # Limpiamos las comillas del JSON
-                        json_marker = chr(96) * 3 + "json"
-                        end_marker = chr(96) * 3
-                        if json_marker in raw_text:
-                            raw_text = raw_text.split(json_marker)[1]
-                        if end_marker in raw_text:
-                            raw_text = raw_text.rsplit(end_marker, 1)[0]
+                        if os.path.exists("temp_barras.png"): 
+                            os.remove("temp_barras.png")
                             
-                        datos_ia = json.loads(raw_text.strip())
+                    # Comprobamos que lo que ha devuelto la IA son números
+                    if not codigo_ean.isdigit():
+                        st.error(f"❌ La IA no pudo leer un número claro. Intentó leer: {codigo_ean}. Prueba a acercar más la cámara a los números.")
+                    else:
+                        st.success(f"✅ Código EAN detectado: {codigo_ean}")
                         
-                        st.session_state['ia_temp_nombre'] = datos_ia.get('producto_generico', '').lower()
-                        st.session_state['ia_temp_marca'] = datos_ia.get('marca', 'Blanca').title()
-                        st.session_state['ia_temp_peso'] = float(datos_ia.get('peso_total', 1.0))
-                        
-                        if os.path.exists("temp_producto.png"): 
-                            os.remove("temp_producto.png")
+                        # FASE 2: Python consulta la API Open Food Facts
+                        with st.spinner("Fase 2: Conectando con Open Food Facts..."):
+                            url = f"https://world.openfoodfacts.org/api/v2/product/{codigo_ean}.json"
+                            res_api = requests.get(url)
                             
-                        st.success("¡Datos extraídos con éxito!")
-                    except Exception as e: 
-                        st.error(f"Error procesando la imagen: {e}")
-                        
-        # Si la IA extrajo los datos, mostramos el formulario pre-rellenado
+                            if res_api.status_code == 200 and res_api.json().get('status') == 1:
+                                datos_crudos = res_api.json().get('product', {})
+                                
+                                # Extraemos lo esencial para no saturar a la IA
+                                info_para_ia = {
+                                    "nombre": datos_crudos.get("product_name", "Desconocido"),
+                                    "marca": datos_crudos.get("brands", ""),
+                                    "cantidad": datos_crudos.get("quantity", "")
+                                }
+                                
+                                # FASE 3: IA limpia y estructura el JSON
+                                with st.spinner("Fase 3: IA normalizando los datos brutos..."):
+                                    prompt_2 = f"Aquí tienes los datos brutos de un producto sacados de una API: {json.dumps(info_para_ia)}. Actúa como un estructurador de datos y devuelve estrictamente un objeto JSON con 3 claves: 'producto_generico' (el nombre limpio y en minúsculas), 'marca' (la marca principal, si está vacía pon 'Blanca'), y 'peso_total' (convierte la cantidad a un número en kilogramos o litros, ej: si pone 400g o 400ml pon 0.4. Si no hay cantidad, pon 1.0). Sin explicaciones, solo el JSON puro."
+                                    
+                                    res_2 = client.models.generate_content(
+                                        model='gemini-2.5-flash', 
+                                        contents=[prompt_2]
+                                    )
+                                    
+                                    raw_text = res_2.text.strip()
+                                    json_marker = chr(96) * 3 + "json"
+                                    end_marker = chr(96) * 3
+                                    if json_marker in raw_text:
+                                        raw_text = raw_text.split(json_marker)[1]
+                                    if end_marker in raw_text:
+                                        raw_text = raw_text.rsplit(end_marker, 1)[0]
+                                        
+                                    datos_ia = json.loads(raw_text.strip())
+                                    
+                                    # Guardamos en memoria para el formulario
+                                    st.session_state['ia_temp_nombre'] = datos_ia.get('producto_generico', '').lower()
+                                    st.session_state['ia_temp_marca'] = datos_ia.get('marca', 'Blanca').title()
+                                    st.session_state['ia_temp_peso'] = float(datos_ia.get('peso_total', 1.0))
+                                    
+                                    st.rerun()
+                            else:
+                                st.error("❌ El código se leyó bien, pero el producto no existe en la base de datos de Open Food Facts.")
+                                
+                except Exception as e: 
+                    st.error(f"Error en el proceso híbrido: {e}")
+                    
+        # Formulario final donde apruebas lo que ha hecho el puente híbrido
         if 'ia_temp_nombre' in st.session_state:
             st.divider()
-            st.write("🛠️ **Revisa, añade el precio y guarda:**")
+            st.write("🛠️ **Datos estructurados. Añade el precio y guarda:**")
             
             c_ia1, c_ia2 = st.columns(2)
             with c_ia1:
-                nombre_ia = st.text_input("Producto", value=st.session_state['ia_temp_nombre'], key="nom_ia")
-                marca_ia = st.text_input("Marca", value=st.session_state['ia_temp_marca'], key="mar_ia")
+                nombre_ia = st.text_input("Producto", value=st.session_state.get('ia_temp_nombre', ''), key="nom_ia")
+                marca_ia = st.text_input("Marca", value=st.session_state.get('ia_temp_marca', 'Blanca'), key="mar_ia")
                 super_ia = st.selectbox("Comprado en:", LISTA_SUPERS, key="sup_ia")
             with c_ia2:
-                peso_ia = st.number_input("Peso Neto (kg/L)", value=float(st.session_state['ia_temp_peso']), min_value=0.01, step=0.10, key="pes_ia")
+                peso_ia = st.number_input("Peso Neto (kg/L)", value=float(st.session_state.get('ia_temp_peso', 1.0)), min_value=0.01, step=0.10, key="pes_ia")
                 precio_ia = st.number_input("Precio en estantería (€)", min_value=0.0, step=0.10, key="prec_ia")
                 
             if st.button("💾 Guardar Producto", type="primary", use_container_width=True):
                 if precio_ia <= 0:
                     st.warning("⚠️ Recuerda introducir el precio del producto antes de guardar.")
                 else:
-                    # Cálculo matemático local y guardado
                     precio_ref_ia = precio_ia / peso_ia
                     
                     conexion = sqlite3.connect(DB_PATH)
@@ -418,10 +453,9 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                     conexion.commit()
                     conexion.close()
                     
-                    # Limpiamos la pantalla
-                    del st.session_state['ia_temp_nombre']
-                    del st.session_state['ia_temp_marca']
-                    del st.session_state['ia_temp_peso']
+                    st.session_state.pop('ia_temp_nombre', None)
+                    st.session_state.pop('ia_temp_marca', None)
+                    st.session_state.pop('ia_temp_peso', None)
                     
                     st.success(f"✅ ¡{nombre_ia.title()} guardado correctamente!")
                     st.rerun()
