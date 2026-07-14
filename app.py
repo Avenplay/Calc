@@ -250,7 +250,7 @@ with tab_gestion:
                                     time.sleep(2)
                                     continue
                                 else:
-                                raise api_error
+                                    raise api_error  # <- Corregido
                                     
                         codigo_ean = res_1.text.strip().replace(" ", "")
                         
