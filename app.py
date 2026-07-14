@@ -6,7 +6,6 @@ from PIL import Image
 import json
 import os
 from datetime import datetime
-from pyzbar.pyzbar import decode
 
 # ==========================================
 # CONFIGURACIÓN DE PÁGINA Y BASE DE DATOS
@@ -336,82 +335,94 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                 conexion.close()
                 st.success(f"✅ ¡{prod_m.title()} ({marca_m}) guardado a {precio_ref:.2f} €/kg!")
 
+   # ------------------------------------------
+    # PESTAÑA 2: CÁMARA INTELIGENTE (IA)
     # ------------------------------------------
-    # PESTAÑA 2: OPEN FOOD FACTS (API GRATUITA)
-    # ------------------------------------------
-    with tab_barras:
-        import requests
-        st.subheader("Busca por Código de Barras (EAN)")
+    with tab_barras: # Mantengo la variable tab_barras para no romper tu estructura
+        st.subheader("📸 Escáner de Envases con IA")
+        st.write("Hazle una foto a la etiqueta frontal del producto. La IA extraerá los datos al instante.")
         
-        codigo_ean = ""
+        foto_producto = st.camera_input("📸 Capturar Producto")
         
-        # Activa la cámara del móvil nativa de Streamlit
-        foto_barras = st.camera_input("📸 Escanea el código de barras aquí")
-        
-        if foto_barras:
-            # Leemos la foto con la librería pyzbar
-            img_barras = Image.open(foto_barras)
-            codigos_detectados = decode(img_barras)
-            
-            if codigos_detectados:
-                codigo_ean = codigos_detectados[0].data.decode('utf-8')
-                st.success(f"✅ Código detectado: {codigo_ean}")
-            else:
-                st.error("⚠️ No se ha detectado el código. Intenta enfocarlo mejor o escríbelo a mano abajo.")
-        
-        st.write("O si la cámara falla, mételo a mano:")
-        codigo_ean_manual = st.text_input("Código EAN Manual:", value=codigo_ean, placeholder="Ej: 8410012102509")
-        
-        # Usamos el manual si se ha escrito, o el de la cámara si se detectó
-        codigo_final = codigo_ean_manual if codigo_ean_manual else codigo_ean
-        
-        if st.button("🔍 Buscar en Base de Datos Abierta"):
-            if codigo_final:
-                with st.spinner("Consultando Open Food Facts..."):
-                    url = f"[https://world.openfoodfacts.org/api/v2/product/](https://world.openfoodfacts.org/api/v2/product/){codigo_final}.json"
-                    res = requests.get(url)
-                    
-                    if res.status_code == 200 and res.json().get('status') == 1:
-                        producto_data = res.json().get('product', {})
-                        st.session_state['ean_temp_nombre'] = producto_data.get('product_name', 'Desconocido')
-                        st.session_state['ean_temp_marca'] = producto_data.get('brands', 'Blanca').split(',')[0]
-                    else:
-                        st.error("❌ Producto no encontrado en la base global. Tendrás que meterlo en 'Ingreso Manual'.")
-            else:
-                st.warning("Introduce o escanea un código válido primero.")
-                
-        # Mini-formulario final para guardar
-        if 'ean_temp_nombre' in st.session_state:
-            st.success("🎯 **¡Producto Encontrado!**")
-            st.write(f"**Nombre:** {st.session_state['ean_temp_nombre']}")
-            st.write(f"**Marca:** {st.session_state['ean_temp_marca']}")
+        if foto_producto:
+            if st.button("🚀 Extraer Datos con IA", use_container_width=True):
+                with st.spinner("Analizando la etiqueta del producto..."):
+                    try:
+                        # 1. Configuramos la IA y guardamos la foto
+                        genai.configure(api_key=api_key)
+                        img = Image.open(foto_producto)
+                        img.save("temp_producto.png")
+                        
+                        # 2. El Prompt específico para envases individuales
+                        prompt = "Analiza el envase de esta foto y devuelve estrictamente un objeto JSON con 3 claves: 'producto_generico' (qué es, ej: tomate frito, leche entera), 'marca' (ej: Orlando, si no pone nada pon Blanca), y 'peso_total' (solo el numero en kg o litros, ej: si marca 400g pon 0.4). Sin explicaciones, solo el JSON."
+                        
+                        myfile = genai.upload_file("temp_producto.png")
+                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        response = model.generate_content([myfile, prompt])
+                        
+                        raw_text = response.text.strip()
+                        
+                        # 3. Limpiamos las comillas del JSON
+                        json_marker = chr(96) * 3 + "json"
+                        end_marker = chr(96) * 3
+                        if json_marker in raw_text:
+                            raw_text = raw_text.split(json_marker)[1]
+                        if end_marker in raw_text:
+                            raw_text = raw_text.rsplit(end_marker, 1)[0]
+                            
+                        datos_ia = json.loads(raw_text.strip())
+                        
+                        # 4. Guardamos los datos en memoria para que puedas revisarlos
+                        st.session_state['ia_temp_nombre'] = datos_ia.get('producto_generico', '').lower()
+                        st.session_state['ia_temp_marca'] = datos_ia.get('marca', 'Blanca').title()
+                        st.session_state['ia_temp_peso'] = float(datos_ia.get('peso_total', 1.0))
+                        
+                        if os.path.exists("temp_producto.png"): 
+                            os.remove("temp_producto.png")
+                            
+                        st.success("¡Datos extraídos con éxito!")
+                    except Exception as e: 
+                        st.error(f"Error procesando la imagen: {e}")
+                        
+        # Si la IA extrajo los datos, mostramos el formulario pre-rellenado
+        if 'ia_temp_nombre' in st.session_state:
             st.divider()
+            st.write("🛠️ **Revisa, añade el precio y guarda:**")
             
-            c_ean1, c_ean2 = st.columns(2)
-            with c_ean1:
-                super_ean = st.selectbox("Comprado en:", LISTA_SUPERS, key="sup_ean")
-                precio_ean = st.number_input("Precio Total (€)", min_value=0.0, step=0.10, key="prec_ean")
-            with c_ean2:
-                peso_ean = st.number_input("Peso Neto Total (kg/L)", min_value=0.01, step=0.10, key="peso_ean")
+            c_ia1, c_ia2 = st.columns(2)
+            with c_ia1:
+                nombre_ia = st.text_input("Producto", value=st.session_state['ia_temp_nombre'], key="nom_ia")
+                marca_ia = st.text_input("Marca", value=st.session_state['ia_temp_marca'], key="mar_ia")
+                super_ia = st.selectbox("Comprado en:", LISTA_SUPERS, key="sup_ia")
+            with c_ia2:
+                peso_ia = st.number_input("Peso Neto (kg/L)", value=float(st.session_state['ia_temp_peso']), min_value=0.01, step=0.10, key="pes_ia")
+                precio_ia = st.number_input("Precio en estantería (€)", min_value=0.0, step=0.10, key="prec_ia")
                 
-            if st.button("💾 Guardar Producto Escaneado"):
-                peso_total = peso_ean
-                precio_ref_ean = (precio_ean / peso_total) if peso_total > 0 else precio_ean
-                
-                conexion = sqlite3.connect(DB_PATH)
-                cursor = conexion.cursor()
-                cursor.execute("""
-                    INSERT INTO despensa 
-                    (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
-                    VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?)
-                """, (super_ean, st.session_state['ean_temp_nombre'].lower(), st.session_state['ean_temp_marca'].title(), peso_ean, precio_ean, precio_ref_ean, datetime.now().strftime("%Y-%m-%d")))
-                
-                conexion.commit()
-                conexion.close()
-                del st.session_state['ean_temp_nombre']
-                del st.session_state['ean_temp_marca']
-                st.success("✅ ¡Guardado con éxito!")
-                st.rerun()
+            if st.button("💾 Guardar Producto", type="primary", use_container_width=True):
+                if precio_ia <= 0:
+                    st.warning("⚠️ Recuerda introducir el precio del producto antes de guardar.")
+                else:
+                    # Cálculo matemático local y guardado
+                    precio_ref_ia = precio_ia / peso_ia
+                    
+                    conexion = sqlite3.connect(DB_PATH)
+                    cursor = conexion.cursor()
+                    cursor.execute("""
+                        INSERT INTO despensa 
+                        (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
+                        VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?)
+                    """, (super_ia, nombre_ia.lower(), marca_ia.title(), peso_ia, precio_ia, precio_ref_ia, datetime.now().strftime("%Y-%m-%d")))
+                    
+                    conexion.commit()
+                    conexion.close()
+                    
+                    # Limpiamos la pantalla
+                    del st.session_state['ia_temp_nombre']
+                    del st.session_state['ia_temp_marca']
+                    del st.session_state['ia_temp_peso']
+                    
+                    st.success(f"✅ ¡{nombre_ia.title()} guardado correctamente!")
+                    st.rerun()
 
 # ==========================================
 # SECCIÓN 4: MI DESPENSA (CONFIGURACIÓN)
