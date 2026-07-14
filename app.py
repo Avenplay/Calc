@@ -360,8 +360,9 @@ df_despensa = pd.read_sql_query("SELECT * FROM despensa WHERE activo = 1 ORDER B
 conexion.close()
 
 if not df_despensa.empty:
-    df_mostrar = df_despensa[['id', 'producto_generico', 'marca', 'supermercado', 'precio_referencia', 'fecha_compra']].copy()
-    df_mostrar.columns = ['ID', 'Producto', 'Marca', 'Supermercado', 'Precio Ref (€/kg)', 'Fecha']
+    # Añadimos 'precio_total' a la lista de columnas extraídas
+    df_mostrar = df_despensa[['id', 'producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_referencia', 'fecha_compra']].copy()
+    df_mostrar.columns = ['ID', 'Producto', 'Marca', 'Supermercado', 'Precio Pack (€)', 'Precio Ref (€/kg)', 'Fecha']
     
     st.write("Puedes modificar directamente en la tabla los datos o marcar la casilla para borrar.")
     
@@ -370,9 +371,8 @@ if not df_despensa.empty:
     df_editado = st.data_editor(
         df_mostrar,
         hide_index=True,
-        use_container_width=False, # Sobrescrito abajo con la nueva sintaxis
         width="stretch",
-        disabled=["ID", "Precio Ref (€/kg)", "Fecha"]
+        disabled=["ID", "Precio Pack (€)", "Precio Ref (€/kg)", "Fecha"]
     )
     
     if st.button("Aplicar Cambios a la Despensa", width="stretch"):
@@ -399,3 +399,49 @@ if not df_despensa.empty:
         st.rerun()
 else:
     st.info("Tu despensa está vacía. ¡Empieza a añadir productos o subir tickets!")
+
+
+# ------------------------------------------
+# SECCIÓN 4: LISTA DE LA COMPRA INTELIGENTE
+# ------------------------------------------
+st.header("📝 4. Lista de la Compra Optimizada")
+
+if not df_despensa.empty:
+    st.write("Selecciona qué necesitas comprar. El sistema ha filtrado tu despensa para mostrarte únicamente la opción más barata de cada producto basándose en el precio por Kg/Litro.")
+    
+    # Lógica de optimización: Agrupar por producto y sacar el índice del más barato
+    idx_baratos = df_despensa.groupby('producto_generico')['precio_referencia'].idxmin()
+    df_lista = df_despensa.loc[idx_baratos, ['producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_referencia']].copy()
+    
+    # Formateamos la tabla para que sea bonita
+    df_lista.columns = ['Producto', 'Marca', 'Mejor Supermercado', 'Precio Pack (€)', 'Precio Ref (€/kg)']
+    df_lista.insert(0, 'Comprar', False) # Añadir checkbox al principio
+    
+    df_compras = st.data_editor(
+        df_lista,
+        hide_index=True,
+        width="stretch",
+        disabled=['Producto', 'Marca', 'Mejor Supermercado', 'Precio Pack (€)', 'Precio Ref (€/kg)']
+    )
+    
+    # Filtramos solo los que el usuario ha marcado
+    seleccionados = df_compras[df_compras['Comprar'] == True]
+    
+    if not seleccionados.empty:
+        st.divider()
+        st.subheader("🛒 Tu Carrito Estimado")
+        
+        c_tot1, c_tot2 = st.columns(2)
+        with c_tot1:
+            st.metric("Gasto Total Estimado", f"{seleccionados['Precio Pack (€)'].sum():.2f} €")
+        with c_tot2:
+            st.metric("Artículos en lista", len(seleccionados))
+            
+        st.write("**Ruta de compra recomendada:**")
+        
+        # Agrupar los seleccionados por supermercado para facilitar la compra real
+        ruta = seleccionados.groupby('Mejor Supermercado')['Producto'].apply(list).reset_index()
+        for _, row in ruta.iterrows():
+            st.markdown(f"📍 **{row['Mejor Supermercado']}**: {', '.join(row['Producto']).title()}")
+else:
+    st.info("Sube productos a la despensa para poder generar tu lista de la compra.")
