@@ -146,9 +146,6 @@ if opcion_menu == "📷 Lector de Tickets IA":
                 st.rerun()
 
 # ==========================================
-# SECCIÓN 2: PLANIFICADOR (Placeholder)
-# ==========================================
-# ==========================================
 # SECCIÓN 2: PLANIFICADOR DE RUTAS
 # ==========================================
 elif opcion_menu == "🗺️ Planificador de Rutas":
@@ -280,11 +277,119 @@ elif opcion_menu == "🗺️ Planificador de Rutas":
                             st.write(f"Dar vueltas solo te ahorra **{ahorro_combinado:.2f} €**. ¡No supera tu margen mínimo de {ahorro_minimo:.2f} €! Compra todo en {mejor_monosuper[0]}.")
 
 # ==========================================
-# SECCIÓN 3: MANUAL / BARRAS (Placeholder)
+# SECCIÓN 3: INGRESO MANUAL / BARRAS
 # ==========================================
 elif opcion_menu == "✍️ Ingreso Manual / Barras":
-    st.title("✍️ Añadir Producto Individual")
-    st.info("Pestaña reservada para el formulario simplificado y Open Food Facts.")
+    st.title("✍️ Añadir Producto")
+    st.write("Registra productos individuales rápidamente sin necesidad de ticket.")
+    
+    # Dividimos la pantalla en dos pestañas muy limpias
+    tab_manual, tab_barras = st.tabs(["📝 Ingreso Manual", "🏷️ Escáner Código de Barras"])
+    
+    # ------------------------------------------
+    # PESTAÑA 1: INGRESO MANUAL
+    # ------------------------------------------
+    with tab_manual:
+        st.subheader("Datos del Producto")
+        c1, c2 = st.columns(2)
+        with c1: 
+            super_m = st.selectbox("Supermercado", LISTA_SUPERS, key="sup_man")
+            prod_m = st.text_input("Producto Genérico (ej. tomate frito)").lower().strip()
+            marca_m = st.text_input("Marca (ej. Orlando o Blanca)").title().strip()
+        with c2: 
+            precio_m = st.number_input("Precio Total en caja (€)", min_value=0.0, step=0.10, key="prec_man")
+            # El interruptor mágico para los formatos
+            es_pack = st.toggle("📦 ¿Es un pack multicantidad?")
+            
+            if es_pack:
+                cc1, cc2 = st.columns(2)
+                with cc1: unids_m = st.number_input("Unidades", min_value=2, step=1)
+                with cc2: peso_m = st.number_input("Peso de 1 unidad (kg/L)", min_value=0.01, step=0.10)
+            else:
+                unids_m = 1
+                peso_m = st.number_input("Peso/Volumen total (kg/L)", min_value=0.01, step=0.10)
+                
+        if st.button("💾 Guardar Producto Manual", use_container_width=True):
+            if not prod_m:
+                st.error("⚠️ El nombre del producto no puede estar vacío.")
+            else:
+                # Matemáticas locales para el precio de referencia
+                peso_total_lote = unids_m * peso_m
+                precio_ref = (precio_m / peso_total_lote) if peso_total_lote > 0 else precio_m
+                
+                conexion = sqlite3.connect(DB_PATH)
+                cursor = conexion.cursor()
+                fecha_actual = datetime.now().strftime("%Y-%m-%d")
+                
+                cursor.execute("""
+                    INSERT INTO despensa 
+                    (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """, (super_m, prod_m, marca_m, peso_m, unids_m, precio_m, precio_ref, fecha_actual))
+                
+                conexion.commit()
+                conexion.close()
+                st.success(f"✅ ¡{prod_m.title()} ({marca_m}) guardado a {precio_ref:.2f} €/kg!")
+
+    # ------------------------------------------
+    # PESTAÑA 2: OPEN FOOD FACTS (API GRATUITA)
+    # ------------------------------------------
+    with tab_barras:
+        import requests
+        st.subheader("Busca por Código de Barras (EAN)")
+        st.write("Si tienes un lector USB o usas la app móvil de Streamlit, escanea el código aquí:")
+        
+        codigo_ean = st.text_input("Código de barras:", placeholder="Ej: 8410012102509")
+        
+        if st.button("🔍 Buscar en Base de Datos Abierta"):
+            if codigo_ean:
+                with st.spinner("Consultando Open Food Facts..."):
+                    # Llamada directa y gratuita que no requiere API Key
+                    url = f"https://world.openfoodfacts.org/api/v2/product/{codigo_ean}.json"
+                    res = requests.get(url)
+                    
+                    if res.status_code == 200 and res.json().get('status') == 1:
+                        producto_data = res.json().get('product', {})
+                        st.session_state['ean_temp_nombre'] = producto_data.get('product_name', 'Desconocido')
+                        st.session_state['ean_temp_marca'] = producto_data.get('brands', 'Blanca').split(',')[0]
+                    else:
+                        st.error("❌ Producto no encontrado. Tendrás que introducirlo manualmente en la otra pestaña.")
+            else:
+                st.warning("Introduce un código válido.")
+                
+        # Si la API encontró el producto, mostramos el mini-formulario final para guardarlo
+        if 'ean_temp_nombre' in st.session_state:
+            st.success("🎯 **¡Producto Encontrado!**")
+            st.write(f"**Nombre:** {st.session_state['ean_temp_nombre']}")
+            st.write(f"**Marca:** {st.session_state['ean_temp_marca']}")
+            st.divider()
+            
+            st.write("Completa el registro:")
+            c_ean1, c_ean2 = st.columns(2)
+            with c_ean1:
+                super_ean = st.selectbox("Comprado en:", LISTA_SUPERS, key="sup_ean")
+                precio_ean = st.number_input("Precio Total (€)", min_value=0.0, step=0.10, key="prec_ean")
+            with c_ean2:
+                peso_ean = st.number_input("Peso Neto Total (kg/L)", min_value=0.01, step=0.10, key="peso_ean")
+                
+            if st.button("💾 Guardar Producto Escaneado"):
+                peso_total = peso_ean
+                precio_ref_ean = (precio_ean / peso_total) if peso_total > 0 else precio_ean
+                
+                conexion = sqlite3.connect(DB_PATH)
+                cursor = conexion.cursor()
+                cursor.execute("""
+                    INSERT INTO despensa 
+                    (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
+                    VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?)
+                """, (super_ean, st.session_state['ean_temp_nombre'].lower(), st.session_state['ean_temp_marca'].title(), peso_ean, precio_ean, precio_ref_ean, datetime.now().strftime("%Y-%m-%d")))
+                
+                conexion.commit()
+                conexion.close()
+                del st.session_state['ean_temp_nombre']
+                del st.session_state['ean_temp_marca']
+                st.success("✅ ¡Guardado con éxito!")
+                st.rerun()
 
 # ==========================================
 # SECCIÓN 4: MI DESPENSA (Placeholder)
