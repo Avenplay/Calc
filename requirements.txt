@@ -3,4 +3,4 @@ pandas
 google-generativeai
 pillow
 requests
-pyzbar
+
