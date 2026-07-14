@@ -1,7 +1,7 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 import json
 import os
@@ -38,6 +38,8 @@ def init_db():
 
 # Inicializamos la base de datos automáticamente
 init_db()
+# Cargamos la clave API de forma global
+api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 # ==========================================
 # MENÚ DE NAVEGACIÓN (SIDEBAR)
@@ -75,23 +77,23 @@ if opcion_menu == "📷 Lector de Tickets IA":
             if st.button("🚀 Analizar Ticket"):
                 with st.spinner("Procesando con IA..."):
                     try:
-                        # 1. Configuramos la clave API con la sintaxis estable
-                        genai.configure(api_key=api_key)
+                        # Sintaxis oficial 2026
+                        client = genai.Client(api_key=api_key)
                         imagen.save("temp_ticket.png")
                         
                         prompt = "Analiza este ticket y devuelve estrictamente un objeto JSON con las claves: supermercado, articulos_despensa (lista de objetos con: producto, marca, unidades_pack, peso_unitario_kg, precio_total). Si no pone la marca, pon 'Blanca'. Sin explicaciones, solo el JSON."
                         
-                        # 2. Subimos el archivo y llamamos al modelo de forma tradicional
-                        myfile = genai.upload_file("temp_ticket.png")
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                        response = model.generate_content([myfile, prompt])
+                        uploaded_file = client.files.upload(file="temp_ticket.png")
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash', 
+                            contents=[uploaded_file, prompt]
+                        )
                         
                         raw_text = response.text.strip()
                         
-                        # Limpiamos el texto por si la IA le pone comillas de código (```json)
+                        # Limpiamos las comillas del JSON
                         json_marker = chr(96) * 3 + "json"
                         end_marker = chr(96) * 3
-                        
                         if json_marker in raw_text:
                             raw_text = raw_text.split(json_marker)[1]
                         if end_marker in raw_text:
@@ -348,21 +350,22 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
             if st.button("🚀 Extraer Datos con IA", use_container_width=True):
                 with st.spinner("Analizando la etiqueta del producto..."):
                     try:
-                        # 1. Configuramos la IA y guardamos la foto
-                        genai.configure(api_key=api_key)
+                        # Sintaxis oficial 2026
+                        client = genai.Client(api_key=api_key)
                         img = Image.open(foto_producto)
                         img.save("temp_producto.png")
                         
-                        # 2. El Prompt específico para envases individuales
                         prompt = "Analiza el envase de esta foto y devuelve estrictamente un objeto JSON con 3 claves: 'producto_generico' (qué es, ej: tomate frito, leche entera), 'marca' (ej: Orlando, si no pone nada pon Blanca), y 'peso_total' (solo el numero en kg o litros, ej: si marca 400g pon 0.4). Sin explicaciones, solo el JSON."
                         
-                        myfile = genai.upload_file("temp_producto.png")
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                        response = model.generate_content([myfile, prompt])
+                        uploaded_file = client.files.upload(file="temp_producto.png")
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash', 
+                            contents=[uploaded_file, prompt]
+                        )
                         
                         raw_text = response.text.strip()
                         
-                        # 3. Limpiamos las comillas del JSON
+                        # Limpiamos las comillas del JSON
                         json_marker = chr(96) * 3 + "json"
                         end_marker = chr(96) * 3
                         if json_marker in raw_text:
@@ -372,7 +375,6 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                             
                         datos_ia = json.loads(raw_text.strip())
                         
-                        # 4. Guardamos los datos en memoria para que puedas revisarlos
                         st.session_state['ia_temp_nombre'] = datos_ia.get('producto_generico', '').lower()
                         st.session_state['ia_temp_marca'] = datos_ia.get('marca', 'Blanca').title()
                         st.session_state['ia_temp_peso'] = float(datos_ia.get('peso_total', 1.0))
