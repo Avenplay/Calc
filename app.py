@@ -15,6 +15,38 @@ import requests
 st.set_page_config(page_title="Calculadora de Ahorro", layout="wide")
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 
+# ------------------------------------------
+# SISTEMA DE SEGURIDAD (LOGIN)
+# ------------------------------------------
+def check_password():
+    # Comprobamos si el usuario ya ha iniciado sesión
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+
+    if st.session_state["autenticado"]:
+        return True
+
+    # Si no está autenticado, mostramos la pantalla de login
+    st.title("🔒 Acceso Restringido")
+    st.write("Por favor, introduce la contraseña para acceder a la despensa.")
+    
+    contrasena = st.text_input("Contraseña", type="password")
+    if st.button("Entrar", type="primary", width="stretch"):
+        # Comparamos con la clave guardada en Secrets
+        if contrasena == st.secrets.get("APP_PASSWORD", ""):
+            st.session_state["autenticado"] = True
+            st.rerun()
+        else:
+            st.error("❌ Contraseña incorrecta. Inténtalo de nuevo.")
+    return False
+
+# Si la función devuelve False, detenemos la ejecución de todo el código inferior
+if not check_password():
+    st.stop()
+
+# ==========================================
+# CÓDIGO PRINCIPAL (Solo se ejecuta si hay login)
+# ==========================================
 DB_PATH = "despensa.db"
 LISTA_SUPERS = ["Mercadona", "Carrefour", "Lidl", "Aldi", "Dia", "Alcampo", "Eroski", "Consum", "Otro"]
 
@@ -218,7 +250,7 @@ with tab_gestion:
                                     time.sleep(2)
                                     continue
                                 else:
-                                    raise api_error
+                                raise api_error
                                     
                         codigo_ean = res_1.text.strip().replace(" ", "")
                         
@@ -355,7 +387,7 @@ with tab_gestion:
         df_editado = st.data_editor(
             df_mostrar,
             hide_index=True,
-            width="stretch", # SINTAXIS CORREGIDA DEFINITIVA
+            width="stretch", 
             disabled=["ID", "Precio Pack (€)", "Precio Ref (€/kg)", "Fecha"]
         )
         
@@ -404,9 +436,7 @@ with tab_lista:
             else:
                 productos_encontrados = []
                 
-                # Buscamos coincidencias de cada palabra en la base de datos
                 for item in items_buscados:
-                    # Filtramos por nombre que contenga la palabra clave
                     coincidencias = df_historico[df_historico['producto_generico'].str.contains(item, case=False, na=False)]
                     if not coincidencias.empty:
                         for _, row in coincidencias.iterrows():
@@ -423,11 +453,9 @@ with tab_lista:
                     df_matches = pd.DataFrame(productos_encontrados)
                     st.divider()
                     
-                    # 🟢 RUTA 1: MÁXIMO AHORRO (El mix más barato)
                     st.subheader("🟢 RUTA 1: El Mayor Ahorro (Varios Supermercados)")
                     st.write("Comprando cada producto individualmente donde está más barato.")
                     
-                    # Buscamos el índice del precio de referencia más bajo para cada item buscado
                     idx_min = df_matches.groupby('Producto Buscado')['Precio_Ref'].idxmin()
                     df_mix = df_matches.loc[idx_min]
                     total_mix = df_mix['Precio_Pack'].sum()
@@ -435,18 +463,14 @@ with tab_lista:
                     st.metric("Gasto Total Estimado", f"{total_mix:.2f} €")
                     st.dataframe(df_mix[['Producto Buscado', 'Producto Real', 'Marca', 'Supermercado', 'Precio_Pack']], width="stretch", hide_index=True)
                     
-                    # 🔵 RUTAS 2 Y 3: COMODIDAD (Un solo supermercado)
-                    # Primero sacamos el precio más barato de cada producto dentro de CADA supermercado
                     idx_min_super = df_matches.groupby(['Supermercado', 'Producto Buscado'])['Precio_Ref'].idxmin()
                     df_super = df_matches.loc[idx_min_super]
                     
-                    # Contamos cuántos productos de tu lista tiene cada súper y sumamos el coste
                     agg_super = df_super.groupby('Supermercado').agg(
                         Items_Encontrados=('Producto Buscado', 'nunique'),
                         Costo_Total=('Precio_Pack', 'sum')
                     ).reset_index()
                     
-                    # Ordenamos: primero el que tiene más productos de tu lista, luego el más barato
                     agg_super = agg_super.sort_values(by=['Items_Encontrados', 'Costo_Total'], ascending=[False, True])
                     
                     top_supers = agg_super.head(2)
