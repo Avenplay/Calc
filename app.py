@@ -148,9 +148,136 @@ if opcion_menu == "📷 Lector de Tickets IA":
 # ==========================================
 # SECCIÓN 2: PLANIFICADOR (Placeholder)
 # ==========================================
+# ==========================================
+# SECCIÓN 2: PLANIFICADOR DE RUTAS
+# ==========================================
 elif opcion_menu == "🗺️ Planificador de Rutas":
     st.title("🗺️ Planificador de Compra")
-    st.info("Pestaña reservada para el buscador de rutas.")
+    st.markdown("Escribe lo que necesitas comprar separado por comas (ej: *leche, tomate frito, atún*).")
+    
+    lista_input = st.text_area("Lista de la compra:", height=100)
+    
+    if st.button("🔍 Calcular Mejor Ruta"):
+        if not lista_input.strip():
+            st.warning("⚠️ Escribe al menos un producto para buscar.")
+        else:
+            # 1. Limpiar lista ingresada por el usuario
+            articulos = [x.strip().lower() for x in lista_input.split(",") if x.strip()]
+            
+            conexion = sqlite3.connect(DB_PATH)
+            cursor = conexion.cursor()
+            
+            resultados_por_articulo = {}
+            
+            # 2. Búsqueda local en SQLite (Filtrando inactivos)
+            for art in articulos:
+                query = """
+                    SELECT supermercado, marca, peso_unitario, unidades_pack, precio_total, precio_referencia
+                    FROM despensa
+                    WHERE producto_generico LIKE ? AND activo = 1
+                    ORDER BY precio_referencia ASC
+                """
+                cursor.execute(query, (f"%{art}%",))
+                filas = cursor.fetchall()
+                
+                # Filtrar resultados aplicando el selector del menú lateral
+                filas_filtradas = [f for f in filas if f[0] in supers_activos]
+                
+                if filas_filtradas:
+                    resultados_por_articulo[art] = filas_filtradas
+                else:
+                    st.error(f"❌ No se encontraron precios activos para: **{art}** en los supermercados que has seleccionado hoy.")
+            
+            conexion.close()
+            
+            # 3. El Motor de Matemáticas (Calcular rutas)
+            if len(resultados_por_articulo) == len(articulos): # Solo si encontró todos los productos
+                
+                # Diccionarios para guardar los totales y el carrito de cada opción
+                totales_monosuper = {superm: 0.0 for superm in supers_activos}
+                carrito_monosuper = {superm: [] for superm in supers_activos}
+                
+                costo_hibrido = 0.0
+                carrito_hibrido = []
+                
+                for art, opciones in resultados_por_articulo.items():
+                    # --- Ruta Híbrida (La mejor opción global absoluta) ---
+                    mejor_opcion = opciones[0]
+                    super_hibrido, marca_h, peso_h, uni_h, precio_h, ref_h = mejor_opcion
+                    costo_hibrido += precio_h
+                    carrito_hibrido.append((art, super_hibrido, marca_h, precio_h))
+                    
+                    # --- Rutas Monosúper (La mejor opción por cada tienda) ---
+                    for superm in supers_activos:
+                        opciones_super = [opt for opt in opciones if opt[0] == superm]
+                        if opciones_super:
+                            mejor_super = opciones_super[0]
+                            totales_monosuper[superm] += mejor_super[4]
+                            carrito_monosuper[superm].append((art, mejor_super[1], mejor_super[4]))
+                        else:
+                            # Si en un súper falta un producto, esa ruta se descarta (precio infinito)
+                            totales_monosuper[superm] = float('inf')
+                
+                # 4. Renderizado Visual (Las Tarjetas)
+                st.divider()
+                st.subheader("📊 Tus Opciones de Compra")
+                
+                monosupers_validos = {k: v for k, v in totales_monosuper.items() if v != float('inf')}
+                
+                if not monosupers_validos:
+                    st.warning("⚠️ Ningún supermercado individual tiene TODOS los productos de tu lista. Tendrás que hacer ruta híbrida obligatoriamente.")
+                else:
+                    # Ordenamos para saber cuál es el súper único más barato
+                    monosupers_ordenados = sorted(monosupers_validos.items(), key=lambda x: x[1])
+                    mejor_monosuper = monosupers_ordenados[0]
+                    ahorro_combinado = mejor_monosuper[1] - costo_hibrido
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    # Tarjeta 1: La mejor opción de un solo sitio
+                    with col1:
+                        st.info(f"🥇 Todo en **{mejor_monosuper[0]}**")
+                        st.metric("Costo Total", f"{mejor_monosuper[1]:.2f} €")
+                        with st.expander("Ver lista de compra"):
+                            for item in carrito_monosuper[mejor_monosuper[0]]:
+                                st.write(f"• {item[0].title()} ({item[1]}): {item[2]:.2f} €")
+                                
+                    # Tarjeta 2: La alternativa de un solo sitio
+                    with col2:
+                        if len(monosupers_ordenados) > 1:
+                            alt_mono = monosupers_ordenados[1]
+                            st.warning(f"🥈 Todo en **{alt_mono[0]}**")
+                            # Muestra cuánto más caro es respecto al primero
+                            st.metric("Costo Total", f"{alt_mono[1]:.2f} €", delta=f"+{(alt_mono[1]-mejor_monosuper[1]):.2f} €", delta_color="inverse")
+                            with st.expander("Ver lista de compra"):
+                                for item in carrito_monosuper[alt_mono[0]]:
+                                    st.write(f"• {item[0].title()} ({item[1]}): {item[2]:.2f} €")
+                        else:
+                            st.write("No hay alternativas para comprar todo de golpe.")
+                            
+                    # Tarjeta 3: La Ruta Híbrida (Optimizada)
+                    with col3:
+                        if ahorro_combinado >= ahorro_minimo:
+                            st.success("🗺️ Ruta Híbrida Inteligente")
+                            st.metric("Costo Total", f"{costo_hibrido:.2f} €", delta=f"-{ahorro_combinado:.2f} € vs {mejor_monosuper[0]}")
+                            with st.expander("Ver paradas de la ruta"):
+                                # Agrupamos el carrito híbrido por supermercados para hacerlo más visual
+                                rutas = {}
+                                for item in carrito_hibrido:
+                                    s = item[1]
+                                    if s not in rutas:
+                                        rutas[s] = []
+                                    rutas[s].append((item[0], item[2], item[3]))
+                                    
+                                for s, items in rutas.items():
+                                    st.markdown(f"📍 **Parada en {s}:**")
+                                    for i in items:
+                                        st.write(f"• {i[0].title()} ({i[1]}): {i[2]:.2f} €")
+                        else:
+                            # Penalización visual si no compensa la gasolina/tiempo
+                            st.error("🗺️ Ruta Híbrida Descartada")
+                            st.metric("Costo Total", f"{costo_hibrido:.2f} €")
+                            st.write(f"Dar vueltas solo te ahorra **{ahorro_combinado:.2f} €**. ¡No supera tu margen mínimo de {ahorro_minimo:.2f} €! Compra todo en {mejor_monosuper[0]}.")
 
 # ==========================================
 # SECCIÓN 3: MANUAL / BARRAS (Placeholder)
