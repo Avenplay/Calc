@@ -6,6 +6,7 @@ from PIL import Image
 import json
 import os
 from datetime import datetime
+import time
 
 # ==========================================
 # CONFIGURACIÓN DE PÁGINA Y BASE DE DATOS
@@ -342,6 +343,8 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
     # ------------------------------------------
     with tab_barras:
         import requests
+        import time
+        
         st.subheader("🔍 Escáner Híbrido: Código de Barras")
         st.write("Hazle una foto a los números del código de barras. La IA extraerá el código, consultará la base mundial y estructurará los datos.")
         
@@ -355,15 +358,25 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                     img = Image.open(foto_barras)
                     img.save("temp_barras.png")
                     
-                    # FASE 1: IA lee la imagen y saca el número
+                    # FASE 1: IA lee la imagen (Con sistema anti-colapso 503)
                     with st.spinner("Fase 1: IA leyendo el código numérico..."):
                         prompt_1 = "Lee el código de barras de esta imagen. Devuelve ÚNICAMENTE los números (suele tener 13 dígitos). Nada de texto adicional ni símbolos, solo el número."
-                        
                         uploaded_file = client.files.upload(file="temp_barras.png")
-                        res_1 = client.models.generate_content(
-                            model='gemini-2.5-flash', 
-                            contents=[uploaded_file, prompt_1]
-                        )
+                        
+                        max_reintentos = 3
+                        for intento in range(max_reintentos):
+                            try:
+                                res_1 = client.models.generate_content(
+                                    model='gemini-2.5-flash', 
+                                    contents=[uploaded_file, prompt_1]
+                                )
+                                break # Si funciona, sale del bucle de reintentos
+                            except Exception as api_error:
+                                if "503" in str(api_error) and intento < max_reintentos - 1:
+                                    time.sleep(2) # Espera 2 segundos y vuelve a intentar
+                                    continue
+                                else:
+                                    raise api_error # Si falla 3 veces, muestra el error
                         
                         codigo_ean = res_1.text.strip().replace(" ", "")
                         
@@ -391,14 +404,23 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                                     "cantidad": datos_crudos.get("quantity", "")
                                 }
                                 
-                                # FASE 3: IA limpia y estructura el JSON
+                                # FASE 3: IA limpia y estructura el JSON (También con escudo 503)
                                 with st.spinner("Fase 3: IA normalizando los datos brutos..."):
                                     prompt_2 = f"Aquí tienes los datos brutos de un producto sacados de una API: {json.dumps(info_para_ia)}. Actúa como un estructurador de datos y devuelve estrictamente un objeto JSON con 3 claves: 'producto_generico' (el nombre limpio y en minúsculas), 'marca' (la marca principal, si está vacía pon 'Blanca'), y 'peso_total' (convierte la cantidad a un número en kilogramos o litros, ej: si pone 400g o 400ml pon 0.4. Si no hay cantidad, pon 1.0). Sin explicaciones, solo el JSON puro."
                                     
-                                    res_2 = client.models.generate_content(
-                                        model='gemini-2.5-flash', 
-                                        contents=[prompt_2]
-                                    )
+                                    for intento_2 in range(max_reintentos):
+                                        try:
+                                            res_2 = client.models.generate_content(
+                                                model='gemini-2.5-flash', 
+                                                contents=[prompt_2]
+                                            )
+                                            break
+                                        except Exception as api_error_2:
+                                            if "503" in str(api_error_2) and intento_2 < max_reintentos - 1:
+                                                time.sleep(2)
+                                                continue
+                                            else:
+                                                raise api_error_2
                                     
                                     raw_text = res_2.text.strip()
                                     json_marker = chr(96) * 3 + "json"
