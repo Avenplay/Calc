@@ -6,6 +6,7 @@ from PIL import Image
 import json
 import os
 from datetime import datetime
+from pyzbar.pyzbar import decode
 
 # ==========================================
 # CONFIGURACIÓN DE PÁGINA Y BASE DE DATOS
@@ -75,16 +76,20 @@ if opcion_menu == "📷 Lector de Tickets IA":
             if st.button("🚀 Analizar Ticket"):
                 with st.spinner("Procesando con IA..."):
                     try:
-                        client = genai.Client(api_key=api_key)
+                        # 1. Configuramos la clave API con la sintaxis estable
+                        genai.configure(api_key=api_key)
                         imagen.save("temp_ticket.png")
                         
-                        # Prompt ajustado a la nueva estructura de base de datos
                         prompt = "Analiza este ticket y devuelve estrictamente un objeto JSON con las claves: supermercado, articulos_despensa (lista de objetos con: producto, marca, unidades_pack, peso_unitario_kg, precio_total). Si no pone la marca, pon 'Blanca'. Sin explicaciones, solo el JSON."
                         
-                        uploaded_file = client.files.upload(file="temp_ticket.png")
-                        response = client.models.generate_content(model='gemini-2.5-flash', contents=[uploaded_file, prompt])
+                        # 2. Subimos el archivo y llamamos al modelo de forma tradicional
+                        myfile = genai.upload_file("temp_ticket.png")
+                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        response = model.generate_content([myfile, prompt])
+                        
                         raw_text = response.text.strip()
                         
+                        # Limpiamos el texto por si la IA le pone comillas de código (```json)
                         json_marker = chr(96) * 3 + "json"
                         end_marker = chr(96) * 3
                         
@@ -337,15 +342,33 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
     with tab_barras:
         import requests
         st.subheader("Busca por Código de Barras (EAN)")
-        st.write("Si tienes un lector USB o usas la app móvil de Streamlit, escanea el código aquí:")
         
-        codigo_ean = st.text_input("Código de barras:", placeholder="Ej: 8410012102509")
+        codigo_ean = ""
+        
+        # Activa la cámara del móvil nativa de Streamlit
+        foto_barras = st.camera_input("📸 Escanea el código de barras aquí")
+        
+        if foto_barras:
+            # Leemos la foto con la librería pyzbar
+            img_barras = Image.open(foto_barras)
+            codigos_detectados = decode(img_barras)
+            
+            if codigos_detectados:
+                codigo_ean = codigos_detectados[0].data.decode('utf-8')
+                st.success(f"✅ Código detectado: {codigo_ean}")
+            else:
+                st.error("⚠️ No se ha detectado el código. Intenta enfocarlo mejor o escríbelo a mano abajo.")
+        
+        st.write("O si la cámara falla, mételo a mano:")
+        codigo_ean_manual = st.text_input("Código EAN Manual:", value=codigo_ean, placeholder="Ej: 8410012102509")
+        
+        # Usamos el manual si se ha escrito, o el de la cámara si se detectó
+        codigo_final = codigo_ean_manual if codigo_ean_manual else codigo_ean
         
         if st.button("🔍 Buscar en Base de Datos Abierta"):
-            if codigo_ean:
+            if codigo_final:
                 with st.spinner("Consultando Open Food Facts..."):
-                    # Llamada directa y gratuita que no requiere API Key
-                    url = f"https://world.openfoodfacts.org/api/v2/product/{codigo_ean}.json"
+                    url = f"[https://world.openfoodfacts.org/api/v2/product/](https://world.openfoodfacts.org/api/v2/product/){codigo_final}.json"
                     res = requests.get(url)
                     
                     if res.status_code == 200 and res.json().get('status') == 1:
@@ -353,18 +376,17 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                         st.session_state['ean_temp_nombre'] = producto_data.get('product_name', 'Desconocido')
                         st.session_state['ean_temp_marca'] = producto_data.get('brands', 'Blanca').split(',')[0]
                     else:
-                        st.error("❌ Producto no encontrado. Tendrás que introducirlo manualmente en la otra pestaña.")
+                        st.error("❌ Producto no encontrado en la base global. Tendrás que meterlo en 'Ingreso Manual'.")
             else:
-                st.warning("Introduce un código válido.")
+                st.warning("Introduce o escanea un código válido primero.")
                 
-        # Si la API encontró el producto, mostramos el mini-formulario final para guardarlo
+        # Mini-formulario final para guardar
         if 'ean_temp_nombre' in st.session_state:
             st.success("🎯 **¡Producto Encontrado!**")
             st.write(f"**Nombre:** {st.session_state['ean_temp_nombre']}")
             st.write(f"**Marca:** {st.session_state['ean_temp_marca']}")
             st.divider()
             
-            st.write("Completa el registro:")
             c_ean1, c_ean2 = st.columns(2)
             with c_ean1:
                 super_ean = st.selectbox("Comprado en:", LISTA_SUPERS, key="sup_ean")
