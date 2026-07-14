@@ -392,8 +392,84 @@ elif opcion_menu == "✍️ Ingreso Manual / Barras":
                 st.rerun()
 
 # ==========================================
-# SECCIÓN 4: MI DESPENSA (Placeholder)
+# SECCIÓN 4: MI DESPENSA (CONFIGURACIÓN)
 # ==========================================
 elif opcion_menu == "📦 Mi Despensa (Configuración)":
-    st.title("📦 Base de Datos Local")
-    st.info("Pestaña reservada para ver la tabla completa, descartar y borrar productos.")
+    st.title("📦 Mi Despensa y Precios")
+    st.markdown("Consulta tu histórico, corrige nombres o **desactiva** productos para que el planificador los ignore.")
+
+    conexion = sqlite3.connect(DB_PATH)
+    # Cargamos toda la tabla en un DataFrame de Pandas
+    df_despensa = pd.read_sql_query("SELECT * FROM despensa", conexion)
+    conexion.close()
+
+    if df_despensa.empty:
+        st.info("🛒 Tu despensa está vacía. Ve al escáner o al formulario para añadir tus primeros productos.")
+    else:
+        # Convertimos el 1 y 0 de SQLite a True/False para que Streamlit muestre un checkbox bonito
+        df_despensa['activo'] = df_despensa['activo'].astype(bool)
+
+        st.subheader("🗂️ Panel de Control de Productos")
+        
+        # Tabla interactiva
+        df_editado = st.data_editor(
+            df_despensa,
+            column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "supermercado": st.column_config.TextColumn("Súper", disabled=True),
+                "producto_generico": st.column_config.TextColumn("Producto (Editable)"),
+                "marca": st.column_config.TextColumn("Marca (Editable)"),
+                "peso_unitario": st.column_config.NumberColumn("Peso (kg/L)", disabled=True),
+                "unidades_pack": st.column_config.NumberColumn("Unidades", disabled=True),
+                "precio_total": st.column_config.NumberColumn("Precio Total", disabled=True, format="%.2f €"),
+                "precio_referencia": st.column_config.NumberColumn("€/kg o L", disabled=True, format="%.3f €"),
+                "activo": st.column_config.CheckboxColumn("Activo (Usar en rutas)", default=True),
+                "fecha_compra": st.column_config.TextColumn("Fecha", disabled=True)
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+
+        if st.button("💾 Guardar Cambios en la Base de Datos", type="primary"):
+            conexion = sqlite3.connect(DB_PATH)
+            cursor = conexion.cursor()
+            
+            # Recorremos la tabla editada y actualizamos SQLite
+            for index, row in df_editado.iterrows():
+                # Volvemos a convertir el True/False del checkbox a 1 o 0 para la base de datos
+                activo_int = 1 if row['activo'] else 0 
+                
+                cursor.execute("""
+                    UPDATE despensa
+                    SET activo = ?, producto_generico = ?, marca = ?
+                    WHERE id = ?
+                """, (activo_int, row['producto_generico'], row['marca'], row['id']))
+                
+            conexion.commit()
+            conexion.close()
+            st.success("✅ ¡Base de datos actualizada con éxito!")
+            st.rerun()
+
+        st.divider()
+        
+        # Zona de borrado permanente por si te equivocas metiendo un producto
+        st.subheader("🗑️ Zona de Peligro: Eliminar Registro")
+        st.write("Si quieres borrar un producto para siempre (en lugar de desactivarlo), introduce su ID.")
+        
+        col_del1, col_del2 = st.columns([1, 3])
+        with col_del1:
+            id_borrar = st.number_input("ID a borrar:", min_value=0, step=1)
+        with col_del2:
+            st.write("") # Espaciador para alinear el botón
+            st.write("")
+            if st.button("❌ Eliminar Producto Definitivamente"):
+                if id_borrar > 0:
+                    conexion = sqlite3.connect(DB_PATH)
+                    cursor = conexion.cursor()
+                    cursor.execute("DELETE FROM despensa WHERE id = ?", (id_borrar,))
+                    conexion.commit()
+                    conexion.close()
+                    st.success(f"Registro {id_borrar} eliminado del sistema.")
+                    st.rerun()
+                else:
+                    st.warning("Introduce un ID válido mayor que 0.")
