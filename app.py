@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+import psycopg2
 from datetime import datetime
 import json
 from PIL import Image
@@ -8,6 +8,10 @@ import os
 import time
 from google import genai
 import requests
+import warnings
+
+# Suprimir avisos de Pandas en el log del servidor
+warnings.filterwarnings('ignore', category=UserWarning)
 
 # ------------------------------------------
 # CONFIGURACIÓN GLOBAL
@@ -19,20 +23,17 @@ api_key = st.secrets.get("GEMINI_API_KEY", "")
 # SISTEMA DE SEGURIDAD (LOGIN)
 # ------------------------------------------
 def check_password():
-    # Comprobamos si el usuario ya ha iniciado sesión
     if "autenticado" not in st.session_state:
         st.session_state["autenticado"] = False
 
     if st.session_state["autenticado"]:
         return True
 
-    # Si no está autenticado, mostramos la pantalla de login
     st.title("🔒 Acceso Restringido")
     st.write("Por favor, introduce la contraseña para acceder a la despensa.")
     
     contrasena = st.text_input("Contraseña", type="password")
     if st.button("Entrar", type="primary", width="stretch"):
-        # Comparamos con la clave guardada en Secrets
         if contrasena == st.secrets.get("APP_PASSWORD", ""):
             st.session_state["autenticado"] = True
             st.rerun()
@@ -40,22 +41,25 @@ def check_password():
             st.error("❌ Contraseña incorrecta. Inténtalo de nuevo.")
     return False
 
-# Si la función devuelve False, detenemos la ejecución de todo el código inferior
 if not check_password():
     st.stop()
 
 # ==========================================
-# CÓDIGO PRINCIPAL (Solo se ejecuta si hay login)
+# CÓDIGO PRINCIPAL (Base de datos en la Nube)
 # ==========================================
-DB_PATH = "despensa.db"
 LISTA_SUPERS = ["Mercadona", "Carrefour", "Lidl", "Aldi", "Dia", "Alcampo", "Eroski", "Consum", "Otro"]
 
+# Función central de conexión a Supabase
+def get_db_conexion():
+    return psycopg2.connect(st.secrets["DATABASE_URL"])
+
 def init_db():
-    conexion = sqlite3.connect(DB_PATH)
+    conexion = get_db_conexion()
     cursor = conexion.cursor()
+    # Sintaxis PostgreSQL: SERIAL en lugar de AUTOINCREMENT
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS despensa (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             supermercado TEXT,
             producto_generico TEXT,
             marca TEXT,
@@ -163,7 +167,7 @@ with tab_gestion:
                 })
                 
             if st.form_submit_button("💾 Guardar Ticket en Base de Datos", width="stretch"):
-                conexion = sqlite3.connect(DB_PATH)
+                conexion = get_db_conexion()
                 cursor = conexion.cursor()
                 fecha_hoy = datetime.now().strftime("%Y-%m-%d")
                 
@@ -171,16 +175,17 @@ with tab_gestion:
                     peso_total_lote = prod["unidades"] * prod["peso"]
                     precio_ref = (prod["precio"] / peso_total_lote) if peso_total_lote > 0 else prod["precio"]
                     
+                    # Sintaxis PostgreSQL usa %s en vez de ?
                     cursor.execute("""
                         INSERT INTO despensa 
                         (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s)
                     """, (supermercado_detectado, prod["nombre"].lower(), prod["marca"].title(), prod["peso"], prod["unidades"], prod["precio"], precio_ref, fecha_hoy))
                     
                 conexion.commit()
                 conexion.close()
                 del st.session_state['resultado_json_ticket']
-                st.success("✅ ¡Todos los productos del ticket guardados con éxito!")
+                st.success("✅ ¡Todos los productos del ticket guardados en la Nube con éxito!")
                 st.rerun()
 
     st.divider()
@@ -204,17 +209,17 @@ with tab_gestion:
                 peso_total = unidades * peso
                 precio_ref = (precio / peso_total) if peso_total > 0 else precio
                 
-                conexion = sqlite3.connect(DB_PATH)
+                conexion = get_db_conexion()
                 cursor = conexion.cursor()
                 cursor.execute("""
                     INSERT INTO despensa 
                     (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s)
                 """, (supermercado, producto.lower(), marca.title(), peso, unidades, precio, precio_ref, datetime.now().strftime("%Y-%m-%d")))
                 
                 conexion.commit()
                 conexion.close()
-                st.success("✅ Producto guardado con éxito.")
+                st.success("✅ Producto guardado en la Nube con éxito.")
                 st.rerun()
 
     with subtab_barras:
@@ -250,7 +255,7 @@ with tab_gestion:
                                     time.sleep(2)
                                     continue
                                 else:
-                                    raise api_error  # <- Corregido
+                                    raise api_error
                                     
                         codigo_ean = res_1.text.strip().replace(" ", "")
                         
@@ -351,12 +356,12 @@ with tab_gestion:
                     peso_total_lote = unids_ia * peso_ia
                     precio_ref_ia = (precio_ia / peso_total_lote) if peso_total_lote > 0 else precio_ia
                     
-                    conexion = sqlite3.connect(DB_PATH)
+                    conexion = get_db_conexion()
                     cursor = conexion.cursor()
                     cursor.execute("""
                         INSERT INTO despensa 
                         (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s)
                     """, (super_ia, nombre_ia.lower(), marca_ia.title(), peso_ia, unids_ia, precio_ia, precio_ref_ia, datetime.now().strftime("%Y-%m-%d")))
                     
                     conexion.commit()
@@ -373,7 +378,7 @@ with tab_gestion:
     st.divider()
 
     st.header("📊 3. Mi Despensa (Editar y Borrar)")
-    conexion = sqlite3.connect(DB_PATH)
+    conexion = get_db_conexion()
     df_despensa = pd.read_sql_query("SELECT * FROM despensa WHERE activo = 1 ORDER BY fecha_compra DESC", conexion)
     conexion.close()
 
@@ -392,7 +397,7 @@ with tab_gestion:
         )
         
         if st.button("Aplicar Cambios a la Despensa", width="stretch"):
-            conexion = sqlite3.connect(DB_PATH)
+            conexion = get_db_conexion()
             cursor = conexion.cursor()
             
             ids_borrar = df_editado[df_editado['Borrar'] == True]['ID'].tolist()
@@ -403,8 +408,8 @@ with tab_gestion:
                 if not row['Borrar']:
                     cursor.execute("""
                         UPDATE despensa 
-                        SET producto_generico = ?, marca = ?, supermercado = ?
-                        WHERE id = ?
+                        SET producto_generico = %s, marca = %s, supermercado = %s
+                        WHERE id = %s
                     """, (row['Producto'].lower(), row['Marca'].title(), row['Supermercado'], row['ID']))
                     
             conexion.commit()
@@ -427,7 +432,7 @@ with tab_lista:
         items_buscados = [item.strip().lower() for item in lista_input.split(",") if item.strip()]
         
         if items_buscados:
-            conexion = sqlite3.connect(DB_PATH)
+            conexion = get_db_conexion()
             df_historico = pd.read_sql_query("SELECT * FROM despensa WHERE activo = 1", conexion)
             conexion.close()
             
