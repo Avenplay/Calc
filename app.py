@@ -194,7 +194,8 @@ with tab_gestion:
     subtab_manual, subtab_barras = st.tabs(["📝 Ingreso Manual", "📸 Escáner Multifoto"])
 
     with subtab_manual:
-        with st.form("form_manual"):
+        # Añadimos una 'key' única para el formulario
+        with st.form("form_manual", clear_on_submit=True): 
             c1, c2 = st.columns(2)
             with c1:
                 supermercado = st.selectbox("Supermercado", LISTA_SUPERS)
@@ -220,7 +221,7 @@ with tab_gestion:
                 conexion.commit()
                 conexion.close()
                 st.success("✅ Producto guardado en la Nube con éxito.")
-                st.rerun()
+                # Al tener clear_on_submit=True, Streamlit ya limpia los campos automáticamente aquí
 
     with subtab_barras:
         st.write("Sube o haz varias fotos. La IA cruzará todas para extraer la información.")
