@@ -45,18 +45,18 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# CÓDIGO PRINCIPAL (Base de datos en la Nube)
+# CÓDIGO PRINCIPAL (Optimizado para la Nube)
 # ==========================================
 LISTA_SUPERS = ["Mercadona", "Carrefour", "Lidl", "Aldi", "Dia", "Alcampo", "Eroski", "Consum", "Otro"]
 
-# Función central de conexión a Supabase
 def get_db_conexion():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
 
+# 🚀 OPTIMIZACIÓN 1: El Escudo Anti-Reinicio
+@st.cache_resource
 def init_db():
     conexion = get_db_conexion()
     cursor = conexion.cursor()
-    # Sintaxis PostgreSQL: SERIAL en lugar de AUTOINCREMENT
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS despensa (
             id SERIAL PRIMARY KEY,
@@ -73,8 +73,9 @@ def init_db():
     """)
     conexion.commit()
     conexion.close()
+    return True # Necesario para que st.cache_resource sepa que terminó correctamente
 
-init_db()
+init_db() # Ahora esta llamada es casi instantánea tras el primer arranque
 
 def limpiar_temporales():
     for f in os.listdir("."):
@@ -175,7 +176,6 @@ with tab_gestion:
                     peso_total_lote = prod["unidades"] * prod["peso"]
                     precio_ref = (prod["precio"] / peso_total_lote) if peso_total_lote > 0 else prod["precio"]
                     
-                    # Sintaxis PostgreSQL usa %s en vez de ?
                     cursor.execute("""
                         INSERT INTO despensa 
                         (supermercado, producto_generico, marca, peso_unitario, unidades_pack, precio_total, precio_referencia, activo, fecha_compra) 
