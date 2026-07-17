@@ -363,32 +363,48 @@ with tab_rutas:
 
         st.divider()
         
-        # --- PARTE C: LAS 3 RUTAS CLÁSICAS ---
+     # --- PARTE C: EL CEREBRO DE LAS RUTAS ---
         if st.session_state['lista_compra']:
-            if st.button("🚀 Calcular las 3 Mejores Opciones", type="primary", width="stretch"):
+            if st.button("🚀 Calcular Opciones de Compra", type="primary", width="stretch"):
                 items_buscados = st.session_state['lista_compra']
                 df_matches = df_db[df_db['producto_generico'].isin(items_buscados)]
                 
                 if not df_matches.empty:
                     st.header("🗺️ Resultados de Rutas")
                     
-                    # 1. RUTA: EL MAYOR AHORRO (MIX)
-                    st.subheader("🟢 RUTA 1: El Mayor Ahorro (Varios Supermercados)")
-                    st.write("Comprando cada producto donde el Kilo/Litro es más barato.")
-                    
+                    # 1. CÁLCULO DE LA RUTA DE AHORRO ABSOLUTO
                     idx_min = df_matches.groupby('producto_generico')['precio_normalizado'].idxmin()
                     df_mix = df_matches.loc[idx_min]
-                    total_mix = df_mix['precio_total'].sum()
                     
-                    st.metric("Gasto Total Estimado (Caja)", f"{total_mix:.2f} €")
+                    supers_in_mix = df_mix['supermercado'].unique()
                     
-                    # Columnas limpias sin fechas ni IDs
-                    df_mostrar_mix = df_mix[['producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_normalizado']].copy()
-                    df_mostrar_mix.columns = ['Producto', 'Marca', 'Supermercado', 'Precio Caja (€)', 'Precio Real (€/Kg-L)']
-                    df_mostrar_mix['Producto'] = df_mostrar_mix['Producto'].str.title()
-                    st.dataframe(df_mostrar_mix, width="stretch", hide_index=True)
-                    
-                    # 2 y 3. RUTAS: COMPRA CÓMODA
+                    if len(supers_in_mix) > 1:
+                        st.subheader("🟢 RUTA 1: El Mayor Ahorro (Varios Supermercados)")
+                        st.write("Comprando cada producto donde el Kilo/Litro es más barato.")
+                        
+                        total_mix = df_mix['precio_total'].sum()
+                        st.metric("Gasto Total Estimado (Caja)", f"{total_mix:.2f} €")
+                        
+                        df_mostrar_mix = df_mix[['producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_normalizado']].copy()
+                        df_mostrar_mix.columns = ['Producto', 'Marca', 'Supermercado', 'Precio Caja (€)', 'Precio Real (€/Kg-L)']
+                        df_mostrar_mix['Producto'] = df_mostrar_mix['Producto'].str.title()
+                        st.dataframe(df_mostrar_mix, width="stretch", hide_index=True)
+                        mostrar_hibrida = True
+                    else:
+                        mostrar_hibrida = False
+                        super_ganador = supers_in_mix[0]
+                        st.subheader(f"🏆 RUTA DE ORO: ¡Todo en {super_ganador}!")
+                        st.write("Has tenido suerte: hacer toda la compra en este supermercado es la opción más barata absoluta.")
+                        
+                        total_mix = df_mix['precio_total'].sum()
+                        st.metric("Gasto Total Estimado (Caja)", f"{total_mix:.2f} €")
+                        
+                        df_mostrar_mix = df_mix[['producto_generico', 'marca', 'precio_total', 'precio_normalizado']].copy()
+                        df_mostrar_mix.columns = ['Producto', 'Marca', 'Precio Caja (€)', 'Precio Real (€/Kg-L)']
+                        df_mostrar_mix['Producto'] = df_mostrar_mix['Producto'].str.title()
+                        st.dataframe(df_mostrar_mix, width="stretch", hide_index=True)
+
+                    # 2. RUTAS DE COMPRA CÓMODA (ALTERNATIVAS)
                     idx_min_super = df_matches.groupby(['supermercado', 'producto_generico'])['precio_normalizado'].idxmin()
                     df_super = df_matches.loc[idx_min_super]
                     
@@ -398,22 +414,32 @@ with tab_rutas:
                     ).reset_index()
                     
                     agg_super = agg_super.sort_values(by=['Items_Encontrados', 'Costo_Total'], ascending=[False, True])
-                    top_supers = agg_super.head(2)
                     
-                    for i, row in top_supers.iterrows():
-                        super_name = row['supermercado']
+                    # Si un supermercado ya ganó la Ruta de Oro, lo quitamos de las alternativas para no repetir
+                    if not mostrar_hibrida:
+                        agg_super = agg_super[agg_super['supermercado'] != supers_in_mix[0]]
+                        titulo_rutas_alt = "🔵 Alternativas de Compra Cómoda"
+                    else:
+                        titulo_rutas_alt = "🔵 Rutas de Compra Cómoda (Un solo súper)"
+                        
+                    if not agg_super.empty:
                         st.divider()
-                        st.subheader(f"🔵 RUTA {i+2}: Compra Cómoda en {super_name}")
-                        st.write(f"Tienen {row['Items_Encontrados']} de los {len(items_buscados)} productos que buscas.")
+                        st.header(titulo_rutas_alt)
                         
-                        st.metric("Gasto Total Estimado", f"{row['Costo_Total']:.2f} €")
-                        
-                        df_this_super = df_super[df_super['supermercado'] == super_name]
-                        df_show_sup = df_this_super[['producto_generico', 'marca', 'precio_total', 'precio_normalizado']].copy()
-                        df_show_sup.columns = ['Producto', 'Marca', 'Precio Caja (€)', 'Precio Real (€/Kg-L)']
-                        df_show_sup['Producto'] = df_show_sup['Producto'].str.title()
-                        
-                        st.dataframe(df_show_sup, width="stretch", hide_index=True)
+                        for i, row in agg_super.head(2).iterrows():
+                            super_name = row['supermercado']
+                            st.subheader(f"Opción en {super_name}")
+                            st.write(f"Tienen {row['Items_Encontrados']} de los {len(items_buscados)} productos que buscas.")
+                            
+                            st.metric("Gasto Total Estimado", f"{row['Costo_Total']:.2f} €")
+                            
+                            df_this_super = df_super[df_super['supermercado'] == super_name]
+                            df_show_sup = df_this_super[['producto_generico', 'marca', 'precio_total', 'precio_normalizado']].copy()
+                            df_show_sup.columns = ['Producto', 'Marca', 'Precio Caja (€)', 'Precio Real (€/Kg-L)']
+                            df_show_sup['Producto'] = df_show_sup['Producto'].str.title()
+                            
+                            st.dataframe(df_show_sup, width="stretch", hide_index=True)
+                            st.write("") # Espaciador visual
 
 # ==========================================
 # PESTAÑA 4: BASE DE DATOS LIMPÍA Y EDITABLE
