@@ -104,26 +104,29 @@ with tab_masivo:
     st.header("Volcado de Precios Rápido")
     st.write("Pega aquí tu lista de precios o notas del supermercado. La IA lo estructurará, le asignará categorías y calculará el precio por Kilo/Litro.")
     
-    with st.form("form_masivo", clear_on_submit=False):
+    # 1. SOLUCIÓN: clear_on_submit=True limpia el cuadro de texto automáticamente al darle al botón
+    with st.form("form_masivo", clear_on_submit=True):
         super_masivo = st.selectbox("¿De qué supermercado son estos precios?", LISTA_SUPERS)
-        texto_masivo = st.text_area("Lista de productos (Ej: fideos finos hacendado 0.5kg 1,2€, tallarines hacendado 1kg 1€)", height=150)
+        texto_masivo = st.text_area("Lista de productos (Ej: fideos finos hacendado 0.5kg 1,2€)", height=150)
         btn_procesar = st.form_submit_button("🧠 Extraer con Inteligencia Artificial", type="primary", width="stretch")
         
     if btn_procesar and texto_masivo:
         with st.spinner("La IA está leyendo y categorizando tus productos..."):
             try:
                 client = genai.Client(api_key=api_key)
+                
+                # 2. SOLUCIÓN: Reglas estrictas para adivinar la marca blanca y forzar pesos por defecto
                 prompt = f"""
                 Analiza esta lista de productos del supermercado '{super_masivo}':
                 {texto_masivo}
                 
                 Devuelve ÚNICAMENTE un JSON estricto que sea una lista de objetos. Cada objeto debe tener estas claves exactas:
-                - "categoria": Infiere una categoría lógica (ej: "Pasta", "Frescos", "Limpieza", "Salsas"). Intenta agrupar.
-                - "producto_generico": El nombre base sin marca ni pesos (ej: "fideos finos", "tomate frito"). TODO EN MINÚSCULAS.
-                - "marca": La marca (ej: "Hacendado", "Gallo"). Si no se especifica, pon "Blanca".
+                - "categoria": Infiere una categoría lógica (ej: "Pasta", "Frescos", "Limpieza").
+                - "producto_generico": El nombre base sin marca ni pesos. TODO EN MINÚSCULAS.
+                - "marca": Si no se especifica en el texto, deduce la marca blanca principal de '{super_masivo}' (ej: si es Mercadona pon 'Hacendado', si es Carrefour pon 'Carrefour', Lidl pon 'Milbona' o 'Balea'). NUNCA uses la palabra 'Blanca'.
                 - "es_marca_blanca": true o false (booleano).
-                - "peso_unitario": float con el peso en Kg o Litros de una unidad. (ej: 0.5 para medio kilo).
-                - "unidades_pack": int (si es un pack de 3, pon 3, si es suelto pon 1).
+                - "peso_unitario": float con el peso en Kg o Litros de una unidad. Si el texto no lo dice, asume 1.0.
+                - "unidades_pack": int (si es suelto pon 1).
                 - "precio_total": float con el precio total en euros.
                 """
                 response = client.models.generate_content(model='gemini-2.5-flash', contents=[prompt])
@@ -132,7 +135,24 @@ with tab_masivo:
                 if "```json" in raw_text: raw_text = raw_text.split("```json")[1]
                 if "```" in raw_text: raw_text = raw_text.rsplit("```", 1)[0]
                 
-                st.session_state['datos_masivos'] = json.loads(raw_text.strip())
+                datos_extraidos = json.loads(raw_text.strip())
+                
+                # 3. SOLUCIÓN: Calculamos el precio_normalizado en Python para mostrarlo en la tabla previa
+                for item in datos_extraidos:
+                    try:
+                        peso = float(item.get('peso_unitario', 1.0))
+                        uds = int(item.get('unidades_pack', 1))
+                        precio = float(item.get('precio_total', 0.0))
+                        
+                        peso_total = peso * uds
+                        if peso_total > 0:
+                            item['precio_normalizado'] = round(precio / peso_total, 2)
+                        else:
+                            item['precio_normalizado'] = precio
+                    except:
+                        item['precio_normalizado'] = 0.0
+                        
+                st.session_state['datos_masivos'] = datos_extraidos
                 st.success("¡Extracción completada! Revisa los datos antes de guardarlos.")
             except Exception as e:
                 st.error(f"Error en la IA: {e}")
@@ -142,6 +162,11 @@ with tab_masivo:
         st.write("### 🔍 Revisión Final (Puedes editar las celdas directamente)")
         
         df_masivo = pd.DataFrame(st.session_state['datos_masivos'])
+        
+        # Reordenamos las columnas para que el precio_normalizado se vea al final de la tabla
+        columnas_orden = ['categoria', 'producto_generico', 'marca', 'es_marca_blanca', 'peso_unitario', 'unidades_pack', 'precio_total', 'precio_normalizado']
+        df_masivo = df_masivo[columnas_orden]
+        
         df_editado = st.data_editor(df_masivo, num_rows="dynamic", width="stretch")
         
         if st.button("💾 Guardar Todo en la Base de Datos", width="stretch"):
@@ -150,16 +175,14 @@ with tab_masivo:
             fecha_hoy = datetime.now().strftime("%Y-%m-%d")
             
             for _, row in df_editado.iterrows():
-                peso_total_lote = float(row['peso_unitario']) * int(row['unidades_pack'])
-                precio_norm = float(row['precio_total']) / peso_total_lote if peso_total_lote > 0 else float(row['precio_total'])
-                
+                # Ahora simplemente leemos el precio normalizado desde la tabla, ya no lo calculamos aquí
                 cursor.execute("""
                     INSERT INTO registro_precios 
                     (supermercado, categoria, producto_generico, marca, es_marca_blanca, peso_unitario, unidades_pack, precio_total, precio_normalizado, fecha_compra) 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (super_masivo, str(row['categoria']).title(), str(row['producto_generico']).lower(), str(row['marca']).title(), 
                       bool(row['es_marca_blanca']), float(row['peso_unitario']), int(row['unidades_pack']), 
-                      float(row['precio_total']), precio_norm, fecha_hoy))
+                      float(row['precio_total']), float(row['precio_normalizado']), fecha_hoy))
                 
             conexion.commit()
             conexion.close()
