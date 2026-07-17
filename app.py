@@ -213,6 +213,12 @@ with tab_rutas:
     df_db = pd.read_sql_query("SELECT * FROM registro_precios WHERE activo = 1", conexion)
     conexion.close()
     
+    # --- LA ASPIRADORA DE TEXTOS ---
+    if not df_db.empty:
+        df_db['producto_generico'] = df_db['producto_generico'].str.strip().str.lower()
+        df_db['categoria'] = df_db['categoria'].str.strip()
+    # -------------------------------
+    
     if df_db.empty:
         st.warning("Tu base de datos está vacía. Usa el 'Ingreso Masivo' para empezar.")
     else:
@@ -361,15 +367,18 @@ with tab_db:
                 conexion = get_db_conexion()
                 cursor = conexion.cursor()
                 for index, row in edited_df.iterrows():
-                    # Esto actualizará la base de datos con cualquier letra o nombre que cambies a mano
+                    # Usamos .strip() y .lower() al vuelo para limpiar errores humanos antes de guardar
+                    cat_limpia = str(row['Categoría']).strip().title()
+                    prod_limpio = str(row['Producto']).strip().lower()
+                    
                     cursor.execute("""
                         UPDATE registro_precios 
                         SET categoria = %s, producto_generico = %s 
                         WHERE id = %s
-                    """, (row['Categoría'], row['Producto'], row['id']))
+                    """, (cat_limpia, prod_limpio, row['id']))
                 conexion.commit()
                 conexion.close()
-                st.success("✅ Base de datos limpia y normalizada.")
+                st.success("✅ Base de datos limpia, normalizada y sin espacios fantasma.")
                 st.rerun()
     else:
         st.info("Base de datos en blanco.")
