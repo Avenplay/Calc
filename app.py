@@ -200,70 +200,149 @@ with tab_ticket:
     st.info("Para esta versión 2.0 nos estamos centrando en el Ingreso Masivo y la Planificación. ¡Puedes usar la pestaña 1 para meter datos a velocidad de vértigo!")
 
 # ==========================================
-# PESTAÑA 3: PLANIFICADOR DE RUTAS (LA MAGIA)
+# PESTAÑA 3: PLANIFICADOR Y RUTAS (LA MAGIA)
 # ==========================================
 with tab_rutas:
-    st.header("🗺️ El Arquitecto de Compras")
-    st.write("Selecciona lo que necesitas. El motor buscará el precio por kilo más bajo de tu historia.")
+    # Creamos la lista de la compra en la memoria de la sesión
+    if 'lista_compra' not in st.session_state:
+        st.session_state['lista_compra'] = []
+
+    st.header("📝 1. Construir Lista de la Compra")
     
     conexion = get_db_conexion()
     df_db = pd.read_sql_query("SELECT * FROM registro_precios WHERE activo = 1", conexion)
     conexion.close()
     
     if df_db.empty:
-        st.warning("Tu base de datos está vacía. Ve a la pestaña 'Ingreso Masivo' y pega tu primera lista de precios para empezar a comparar.")
+        st.warning("Tu base de datos está vacía. Usa el 'Ingreso Masivo' para empezar.")
     else:
-        # Paso 1: Elegir Categorías (Acordeones/Selectores)
-        categorias_existentes = sorted(df_db['categoria'].unique().tolist())
-        st.subheader("1. Filtra por Categorías")
-        cats_seleccionadas = st.multiselect("¿Qué secciones del súper vas a visitar hoy?", categorias_existentes)
+        col_select, col_lista = st.columns(2)
         
-        if cats_seleccionadas:
-            # Paso 2: Elegir Productos específicos dentro de esas categorías
-            df_filtrado = df_db[df_db['categoria'].isin(cats_seleccionadas)]
-            productos_existentes = sorted(df_filtrado['producto_generico'].unique().tolist())
+        # --- PARTE A: NAVEGADOR POR CATEGORÍAS ---
+        with col_select:
+            st.subheader("🛒 Pasillos (Buscador)")
+            categorias_existentes = sorted(df_db['categoria'].unique().tolist())
+            cat_seleccionada = st.selectbox("Selecciona una categoría:", ["-- Elige Categoría --"] + categorias_existentes)
             
-            st.subheader("2. Selecciona los Productos")
-            prods_seleccionados = st.multiselect("Marca los artículos que necesitas:", productos_existentes)
+            if cat_seleccionada != "-- Elige Categoría --":
+                df_cat = df_db[df_db['categoria'] == cat_seleccionada]
+                # Obtenemos solo los nombres genéricos sin duplicados
+                productos_unicos = sorted(df_cat['producto_generico'].unique().tolist())
+                
+                # Creamos una tabla con checkboxes
+                df_seleccion = pd.DataFrame({
+                    'Añadir': [False] * len(productos_unicos),
+                    'Producto': productos_unicos
+                })
+                
+                df_editado_cat = st.data_editor(df_seleccion, hide_index=True, width="stretch")
+                
+                if st.button("⬇️ Exportar a Ruta", type="primary", width="stretch"):
+                    seleccionados = df_editado_cat[df_editado_cat['Añadir']]['Producto'].tolist()
+                    for p in seleccionados:
+                        if p not in st.session_state['lista_compra']:
+                            st.session_state['lista_compra'].append(p)
+                    st.success(f"Añadidos a la lista.")
+                    st.rerun()
+
+        # --- PARTE B: LA LISTA FINAL Y CÁLCULO ---
+        with col_lista:
+            st.subheader("📋 Tu Lista Actual")
+            todos_los_productos = sorted(df_db['producto_generico'].unique().tolist())
             
-            if prods_seleccionados:
-                st.divider()
-                if st.button("🚀 Calcular Ruta de Máximo Ahorro", type="primary", width="stretch"):
-                    # Filtramos solo los productos que el usuario ha pedido
-                    df_compra = df_db[df_db['producto_generico'].isin(prods_seleccionados)]
+            # El multiselect permite ver lo que hay, borrar con la 'x', y buscar cosas extra a mano
+            lista_actual = st.multiselect(
+                "Añade o quita productos de tu lista final:", 
+                options=todos_los_productos,
+                default=st.session_state['lista_compra']
+            )
+            # Actualizamos la memoria con los cambios manuales
+            st.session_state['lista_compra'] = lista_actual
+
+            if st.button("🗑️ Vaciar Lista"):
+                st.session_state['lista_compra'] = []
+                st.rerun()
+
+        st.divider()
+        
+        # --- PARTE C: LAS 3 RUTAS CLÁSICAS ---
+        if st.session_state['lista_compra']:
+            if st.button("🚀 Calcular las 3 Mejores Opciones", type="primary", width="stretch"):
+                items_buscados = st.session_state['lista_compra']
+                df_matches = df_db[df_db['producto_generico'].isin(items_buscados)]
+                
+                if not df_matches.empty:
+                    st.header("🗺️ Resultados de Rutas")
                     
-                    # Buscar el PRECIO MÍNIMO NORMALIZADO (€/Kg o L) por cada producto genérico
-                    # Usamos idxmin() para sacar la fila exacta donde se dio ese super precio
-                    idx_min = df_compra.groupby('producto_generico')['precio_normalizado'].idxmin()
-                    df_ruta_optima = df_compra.loc[idx_min]
+                    # 1. RUTA: EL MAYOR AHORRO (MIX)
+                    st.subheader("🟢 RUTA 1: El Mayor Ahorro (Varios Supermercados)")
+                    st.write("Comprando cada producto donde el Kilo/Litro es más barato.")
                     
-                    st.subheader("🟢 LA RUTA DE ORO (Ahorro Extremo)")
-                    st.write("Comprando cada cosa exactamente donde es más barata por Kilo/Litro.")
+                    idx_min = df_matches.groupby('producto_generico')['precio_normalizado'].idxmin()
+                    df_mix = df_matches.loc[idx_min]
+                    total_mix = df_mix['precio_total'].sum()
                     
-                    total_estimado = df_ruta_optima['precio_total'].sum()
-                    st.metric(label="Coste Estimado de la Cesta", value=f"{total_estimado:.2f} €")
+                    st.metric("Gasto Total Estimado (Caja)", f"{total_mix:.2f} €")
                     
-                    # Formatear la tabla para que se vea espectacular
-                    df_mostrar = df_ruta_optima[['categoria', 'producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_normalizado']].copy()
-                    df_mostrar.columns = ['Categoría', 'Producto', 'Marca', 'Supermercado', 'Precio Pack (€)', 'Precio Real (€/Kg)']
-                    df_mostrar['Producto'] = df_mostrar['Producto'].str.title()
+                    # Columnas limpias sin fechas ni IDs
+                    df_mostrar_mix = df_mix[['producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_normalizado']].copy()
+                    df_mostrar_mix.columns = ['Producto', 'Marca', 'Supermercado', 'Precio Caja (€)', 'Precio Real (€/Kg-L)']
+                    df_mostrar_mix['Producto'] = df_mostrar_mix['Producto'].str.title()
+                    st.dataframe(df_mostrar_mix, width="stretch", hide_index=True)
                     
-                    st.dataframe(df_mostrar, width="stretch", hide_index=True)
+                    # 2 y 3. RUTAS: COMPRA CÓMODA
+                    idx_min_super = df_matches.groupby(['supermercado', 'producto_generico'])['precio_normalizado'].idxmin()
+                    df_super = df_matches.loc[idx_min_super]
+                    
+                    agg_super = df_super.groupby('supermercado').agg(
+                        Items_Encontrados=('producto_generico', 'nunique'),
+                        Costo_Total=('precio_total', 'sum')
+                    ).reset_index()
+                    
+                    agg_super = agg_super.sort_values(by=['Items_Encontrados', 'Costo_Total'], ascending=[False, True])
+                    top_supers = agg_super.head(2)
+                    
+                    for i, row in top_supers.iterrows():
+                        super_name = row['supermercado']
+                        st.divider()
+                        st.subheader(f"🔵 RUTA {i+2}: Compra Cómoda en {super_name}")
+                        st.write(f"Tienen {row['Items_Encontrados']} de los {len(items_buscados)} productos que buscas.")
+                        
+                        st.metric("Gasto Total Estimado", f"{row['Costo_Total']:.2f} €")
+                        
+                        df_this_super = df_super[df_super['supermercado'] == super_name]
+                        df_show_sup = df_this_super[['producto_generico', 'marca', 'precio_total', 'precio_normalizado']].copy()
+                        df_show_sup.columns = ['Producto', 'Marca', 'Precio Caja (€)', 'Precio Real (€/Kg-L)']
+                        df_show_sup['Producto'] = df_show_sup['Producto'].str.title()
+                        
+                        st.dataframe(df_show_sup, width="stretch", hide_index=True)
 
 # ==========================================
-# PESTAÑA 4: BASE DE DATOS
+# PESTAÑA 4: BASE DE DATOS LIMPÍA
 # ==========================================
 with tab_db:
     st.header("📊 Tu Registro de Precios")
     if not df_db.empty:
-        df_edit = df_db[['id', 'categoria', 'producto_generico', 'marca', 'supermercado', 'precio_normalizado', 'fecha_compra']].copy()
-        df_edit.columns = ['ID', 'Categoría', 'Producto', 'Marca', 'Supermercado', 'Precio (€/Kg-L)', 'Fecha']
-        df_edit['Borrar'] = False
+        st.write("Puedes seleccionar la casilla 'Borrar' y aplicar los cambios. (IDs y Fechas ocultos para mayor limpieza).")
         
-        df_final = st.data_editor(df_edit, hide_index=True, width="stretch", disabled=["ID", "Precio (€/Kg-L)", "Fecha"])
+        # Preparamos el dataframe manteniendo la ID y la fecha pero ordenando a Streamlit que las oculte visualmente
+        df_func = df_db[['id', 'categoria', 'producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_normalizado', 'fecha_compra']].copy()
+        df_func.columns = ['id', 'Categoría', 'Producto', 'Marca', 'Supermercado', 'Precio Caja (€)', 'Precio (€/Kg-L)', 'fecha_compra']
+        df_func['Borrar'] = False
+        
+        edited_df = st.data_editor(
+            df_func,
+            hide_index=True,
+            column_config={
+                "id": None,           # Oculta la columna ID visualmente pero la mantiene para la lógica
+                "fecha_compra": None  # Oculta la columna Fecha visualmente
+            },
+            disabled=["Categoría", "Producto", "Marca", "Supermercado", "Precio Caja (€)", "Precio (€/Kg-L)"],
+            width="stretch"
+        )
         
         if st.button("Eliminar Seleccionados", width="stretch"):
-            ids_borrar = df_final[df_final['Borrar'] == True]['ID'].tolist()
+            ids_borrar = edited_df[edited_df['Borrar'] == True]['id'].tolist()
             if ids_borrar:
                 conexion = get_db_conexion()
                 cursor = conexion.cursor()
