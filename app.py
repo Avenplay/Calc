@@ -115,14 +115,14 @@ with tab_masivo:
             try:
                 client = genai.Client(api_key=api_key)
                 
-                # 2. SOLUCIÓN: Reglas estrictas para adivinar la marca blanca y forzar pesos por defecto
+               # 2. SOLUCIÓN: Reglas estrictas para adivinar la marca blanca y forzar pesos por defecto
                 prompt = f"""
                 Analiza esta lista de productos del supermercado '{super_masivo}':
                 {texto_masivo}
                 
                 Devuelve ÚNICAMENTE un JSON estricto que sea una lista de objetos. Cada objeto debe tener estas claves exactas:
                 - "categoria": Infiere una categoría lógica (ej: "Pasta", "Frescos", "Limpieza").
-                - "producto_generico": El nombre base sin marca ni pesos. TODO EN MINÚSCULAS.
+                - "producto_generico": El nombre base absoluto y minimalista. ELIMINA adjetivos redundantes con la categoría (ej: si es categoría 'Frescos', pon 'tomate', NUNCA 'tomate fresco'). Si es pasta, pon 'tallarines', NUNCA 'tallarines largos'. TODO EN MINÚSCULAS y en singular.
                 - "marca": Si no se especifica en el texto, deduce la marca blanca principal de '{super_masivo}' (ej: si es Mercadona pon 'Hacendado', si es Carrefour pon 'Carrefour', Lidl pon 'Milbona' o 'Balea'). NUNCA uses la palabra 'Blanca'.
                 - "es_marca_blanca": true o false (booleano).
                 - "peso_unitario": float con el peso en Kg o Litros de una unidad. Si el texto no lo dice, asume 1.0.
@@ -218,32 +218,33 @@ with tab_rutas:
     else:
         col_select, col_lista = st.columns(2)
         
-        # --- PARTE A: NAVEGADOR POR CATEGORÍAS ---
+       # --- PARTE A: NAVEGADOR POR CATEGORÍAS ---
         with col_select:
             st.subheader("🛒 Pasillos (Buscador)")
             categorias_existentes = sorted(df_db['categoria'].unique().tolist())
-            cat_seleccionada = st.selectbox("Selecciona una categoría:", ["-- Elige Categoría --"] + categorias_existentes)
+            cat_seleccionada = st.selectbox("Selecciona un pasillo:", ["-- Elige Categoría --"] + categorias_existentes)
             
             if cat_seleccionada != "-- Elige Categoría --":
                 df_cat = df_db[df_db['categoria'] == cat_seleccionada]
                 # Obtenemos solo los nombres genéricos sin duplicados
                 productos_unicos = sorted(df_cat['producto_generico'].unique().tolist())
                 
-                # Creamos una tabla con checkboxes
-                df_seleccion = pd.DataFrame({
-                    'Añadir': [False] * len(productos_unicos),
-                    'Producto': productos_unicos
-                })
+                # INTERFAZ LIMPIA: Usamos multiselect en lugar de la tabla de checkboxes
+                productos_a_añadir = st.multiselect(
+                    f"¿Qué necesitas de {cat_seleccionada}?", 
+                    options=productos_unicos,
+                    placeholder="Haz clic aquí para seleccionar..."
+                )
                 
-                df_editado_cat = st.data_editor(df_seleccion, hide_index=True, width="stretch")
-                
-                if st.button("⬇️ Exportar a Ruta", type="primary", width="stretch"):
-                    seleccionados = df_editado_cat[df_editado_cat['Añadir']]['Producto'].tolist()
-                    for p in seleccionados:
-                        if p not in st.session_state['lista_compra']:
-                            st.session_state['lista_compra'].append(p)
-                    st.success(f"Añadidos a la lista.")
-                    st.rerun()
+                if st.button("⬇️ Añadir a la Ruta", type="primary", width="stretch"):
+                    if productos_a_añadir:
+                        for p in productos_a_añadir:
+                            if p not in st.session_state['lista_compra']:
+                                st.session_state['lista_compra'].append(p)
+                        st.success(f"✅ Productos añadidos a tu lista.")
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ Selecciona al menos un producto primero.")
 
         # --- PARTE B: LA LISTA FINAL Y CÁLCULO ---
         with col_lista:
@@ -318,14 +319,13 @@ with tab_rutas:
                         st.dataframe(df_show_sup, width="stretch", hide_index=True)
 
 # ==========================================
-# PESTAÑA 4: BASE DE DATOS LIMPÍA
+# PESTAÑA 4: BASE DE DATOS LIMPÍA Y EDITABLE
 # ==========================================
 with tab_db:
     st.header("📊 Tu Registro de Precios")
     if not df_db.empty:
-        st.write("Puedes seleccionar la casilla 'Borrar' y aplicar los cambios. (IDs y Fechas ocultos para mayor limpieza).")
+        st.write("Corrige los nombres directamente en la tabla (ej: quita 'fresco' de tomate) o marca 'Borrar' para eliminar.")
         
-        # Preparamos el dataframe manteniendo la ID y la fecha pero ordenando a Streamlit que las oculte visualmente
         df_func = df_db[['id', 'categoria', 'producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_normalizado', 'fecha_compra']].copy()
         df_func.columns = ['id', 'Categoría', 'Producto', 'Marca', 'Supermercado', 'Precio Caja (€)', 'Precio (€/Kg-L)', 'fecha_compra']
         df_func['Borrar'] = False
@@ -334,22 +334,42 @@ with tab_db:
             df_func,
             hide_index=True,
             column_config={
-                "id": None,           # Oculta la columna ID visualmente pero la mantiene para la lógica
-                "fecha_compra": None  # Oculta la columna Fecha visualmente
+                "id": None,           
+                "fecha_compra": None  
             },
-            disabled=["Categoría", "Producto", "Marca", "Supermercado", "Precio Caja (€)", "Precio (€/Kg-L)"],
+            # He quitado 'Categoría' y 'Producto' de disabled para que puedas editarlos
+            disabled=["Marca", "Supermercado", "Precio Caja (€)", "Precio (€/Kg-L)"],
             width="stretch"
         )
         
-        if st.button("Eliminar Seleccionados", width="stretch"):
-            ids_borrar = edited_df[edited_df['Borrar'] == True]['id'].tolist()
-            if ids_borrar:
+        col_borrar, col_guardar = st.columns(2)
+        
+        with col_borrar:
+            if st.button("🗑️ Eliminar Seleccionados", width="stretch"):
+                ids_borrar = edited_df[edited_df['Borrar'] == True]['id'].tolist()
+                if ids_borrar:
+                    conexion = get_db_conexion()
+                    cursor = conexion.cursor()
+                    cursor.execute(f"UPDATE registro_precios SET activo = 0 WHERE id IN ({','.join(map(str, ids_borrar))})")
+                    conexion.commit()
+                    conexion.close()
+                    st.success("✅ Productos eliminados.")
+                    st.rerun()
+                    
+        with col_guardar:
+            if st.button("💾 Guardar Correcciones de Texto", type="primary", width="stretch"):
                 conexion = get_db_conexion()
                 cursor = conexion.cursor()
-                cursor.execute(f"UPDATE registro_precios SET activo = 0 WHERE id IN ({','.join(map(str, ids_borrar))})")
+                for index, row in edited_df.iterrows():
+                    # Esto actualizará la base de datos con cualquier letra o nombre que cambies a mano
+                    cursor.execute("""
+                        UPDATE registro_precios 
+                        SET categoria = %s, producto_generico = %s 
+                        WHERE id = %s
+                    """, (row['Categoría'], row['Producto'], row['id']))
                 conexion.commit()
                 conexion.close()
-                st.success("✅ Productos eliminados del historial.")
+                st.success("✅ Base de datos limpia y normalizada.")
                 st.rerun()
     else:
         st.info("Base de datos en blanco.")
