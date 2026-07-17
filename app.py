@@ -45,7 +45,7 @@ if not check_password():
 # ==========================================
 # CÓDIGO PRINCIPAL - VERSIÓN 2.0
 # ==========================================
-LISTA_SUPERS = ["Mercadona", "Carrefour", "Lidl", "Aldi", "Dia", "Alcampo", "Eroski", "Consum", "Otro"]
+LISTA_SUPERS = ["Mercadona", "Carrefour", "Lidl", "Aldi", "Dia", "Alcampo", "Family Cash", "Otro"]
 
 def get_db_conexion():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
@@ -106,9 +106,17 @@ with tab_masivo:
     
     # 1. SOLUCIÓN: clear_on_submit=True limpia el cuadro de texto automáticamente al darle al botón
     with st.form("form_masivo", clear_on_submit=True):
-        super_masivo = st.selectbox("¿De qué supermercado son estos precios?", LISTA_SUPERS)
+        col_sup1, col_sup2 = st.columns(2)
+        with col_sup1:
+            super_seleccion = st.selectbox("¿De qué supermercado son estos precios?", LISTA_SUPERS)
+        with col_sup2:
+            super_input = st.text_input("Si elegiste 'Otro', escribe el nombre aquí:")
+            
         texto_masivo = st.text_area("Lista de productos (Ej: fideos finos hacendado 0.5kg 1,2€)", height=150)
         btn_procesar = st.form_submit_button("🧠 Extraer con Inteligencia Artificial", type="primary", width="stretch")
+        
+        # Lógica: Usa el texto escrito a mano si seleccionó "Otro", si no, usa el desplegable
+        super_masivo = super_input.title() if super_seleccion == "Otro" and super_input else super_seleccion
         
     if btn_procesar and texto_masivo:
         with st.spinner("La IA está leyendo y categorizando tus productos..."):
@@ -191,14 +199,97 @@ with tab_masivo:
             st.rerun()
 
 # ==========================================
-# PESTAÑA 2: ESCÁNER DE TICKETS
+# PESTAÑA 2: ESCÁNER DE TICKETS V2
 # ==========================================
 with tab_ticket:
-    st.header("Subir Ticket Físico")
-    st.write("Si tienes el ticket en papel, súbelo aquí. La IA intentará inferir las categorías automáticamente.")
-    # El código aquí es el mismo del ticket anterior, pero adaptado a la tabla nueva si en el futuro decides usarlo.
-    st.info("Para esta versión 2.0 nos estamos centrando en el Ingreso Masivo y la Planificación. ¡Puedes usar la pestaña 1 para meter datos a velocidad de vértigo!")
+    st.header("🧾 Subir Ticket Físico")
+    st.write("La IA leerá la foto, extraerá los productos y calculará el precio por Kilo/Litro automáticamente.")
 
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        super_tick_sel = st.selectbox("¿De dónde es este ticket?", LISTA_SUPERS, key="tick_sel")
+    with col_t2:
+        super_tick_in = st.text_input("Si elegiste 'Otro', escribe el nombre:", key="tick_in")
+        
+    super_ticket = super_tick_in.title() if super_tick_sel == "Otro" and super_tick_in else super_tick_sel
+
+    foto_ticket = st.file_uploader("Sube la foto del ticket", type=["png", "jpg", "jpeg"])
+
+    if foto_ticket and st.button("📸 Analizar Ticket", width="stretch", type="primary"):
+        with st.spinner("Leyendo y calculando precios (puede tardar unos segundos)..."):
+            try:
+                client = genai.Client(api_key=api_key)
+                imagen = Image.open(foto_ticket)
+                imagen.save("temp_ticket_v2.png")
+                uploaded_file = client.files.upload(file="temp_ticket_v2.png")
+                
+                prompt_ticket = f"""
+                Analiza este ticket de compra del supermercado '{super_ticket}'.
+                Devuelve ÚNICAMENTE un JSON estricto que sea una lista de objetos. Cada objeto debe tener:
+                - "categoria": Infiere una categoría lógica (ej: Pasta, Frescos, Limpieza).
+                - "producto_generico": Nombre base, minimalista, minúsculas, singular (ej: 'tomate', NUNCA 'tomate fresco').
+                - "marca": Si no se especifica, deduce la marca blanca de '{super_ticket}'. NUNCA 'Blanca'.
+                - "es_marca_blanca": true o false.
+                - "peso_unitario": float (en Kg o Litros). Si el ticket no lo dice, asume 1.0.
+                - "unidades_pack": int.
+                - "precio_total": float con el precio final pagado por ese artículo.
+                """
+                
+                response = client.models.generate_content(model='gemini-2.5-flash', contents=[uploaded_file, prompt_ticket])
+                
+                raw_text = response.text.strip()
+                if "```json" in raw_text: raw_text = raw_text.split("```json")[1]
+                if "```" in raw_text: raw_text = raw_text.rsplit("```", 1)[0]
+                
+                datos_ticket = json.loads(raw_text.strip())
+                
+                # Cálculo matemático interno del precio normalizado
+                for item in datos_ticket:
+                    try:
+                        peso = float(item.get('peso_unitario', 1.0))
+                        uds = int(item.get('unidades_pack', 1))
+                        precio = float(item.get('precio_total', 0.0))
+                        peso_total = peso * uds
+                        item['precio_normalizado'] = round(precio / peso_total, 2) if peso_total > 0 else precio
+                    except:
+                        item['precio_normalizado'] = 0.0
+                        
+                st.session_state['datos_ticket'] = datos_ticket
+                limpiar_temporales()
+                st.success("¡Ticket procesado con éxito!")
+            except Exception as e:
+                limpiar_temporales()
+                st.error(f"Error procesando ticket: {e}")
+
+    if 'datos_ticket' in st.session_state:
+        st.divider()
+        st.write("### 🔍 Revisión del Ticket")
+        df_ticket = pd.DataFrame(st.session_state['datos_ticket'])
+        columnas_orden = ['categoria', 'producto_generico', 'marca', 'es_marca_blanca', 'peso_unitario', 'unidades_pack', 'precio_total', 'precio_normalizado']
+        df_ticket = df_ticket[columnas_orden]
+        
+        df_editado_t = st.data_editor(df_ticket, num_rows="dynamic", width="stretch")
+        
+        if st.button("💾 Guardar Ticket en la Base de Datos", width="stretch"):
+            conexion = get_db_conexion()
+            cursor = conexion.cursor()
+            fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+            
+            for _, row in df_editado_t.iterrows():
+                cursor.execute("""
+                    INSERT INTO registro_precios 
+                    (supermercado, categoria, producto_generico, marca, es_marca_blanca, peso_unitario, unidades_pack, precio_total, precio_normalizado, fecha_compra) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (super_ticket, str(row['categoria']).title(), str(row['producto_generico']).lower(), str(row['marca']).title(), 
+                      bool(row['es_marca_blanca']), float(row['peso_unitario']), int(row['unidades_pack']), 
+                      float(row['precio_total']), float(row['precio_normalizado']), fecha_hoy))
+                
+            conexion.commit()
+            conexion.close()
+            del st.session_state['datos_ticket']
+            st.success("✅ ¡Productos del ticket guardados masivamente!")
+            st.rerun()
+            
 # ==========================================
 # PESTAÑA 3: PLANIFICADOR Y RUTAS (LA MAGIA)
 # ==========================================
@@ -332,8 +423,9 @@ with tab_db:
     if not df_db.empty:
         st.write("Corrige los nombres directamente en la tabla (ej: quita 'fresco' de tomate) o marca 'Borrar' para eliminar.")
         
-        df_func = df_db[['id', 'categoria', 'producto_generico', 'marca', 'supermercado', 'precio_total', 'precio_normalizado', 'fecha_compra']].copy()
-        df_func.columns = ['id', 'Categoría', 'Producto', 'Marca', 'Supermercado', 'Precio Caja (€)', 'Precio (€/Kg-L)', 'fecha_compra']
+        # Traemos también peso_unitario y unidades_pack
+        df_func = df_db[['id', 'categoria', 'producto_generico', 'marca', 'supermercado', 'peso_unitario', 'unidades_pack', 'precio_total', 'precio_normalizado', 'fecha_compra']].copy()
+        df_func.columns = ['id', 'Categoría', 'Producto', 'Marca', 'Supermercado', 'Peso(Kg/L)', 'Uds', 'Precio Caja(€)', 'Precio(€/Kg-L)', 'fecha_compra']
         df_func['Borrar'] = False
         
         edited_df = st.data_editor(
@@ -343,8 +435,8 @@ with tab_db:
                 "id": None,           
                 "fecha_compra": None  
             },
-            # He quitado 'Categoría' y 'Producto' de disabled para que puedas editarlos
-            disabled=["Marca", "Supermercado", "Precio Caja (€)", "Precio (€/Kg-L)"],
+            # Bloqueamos las nuevas columnas para que sean solo de lectura
+            disabled=["Marca", "Supermercado", "Peso(Kg/L)", "Uds", "Precio Caja(€)", "Precio(€/Kg-L)"],
             width="stretch"
         )
         
